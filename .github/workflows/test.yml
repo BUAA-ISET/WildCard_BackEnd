@@ -17,5 +17,5 @@ jobs:
           script: |
             whoami
             cd ~
-            ll
+            la 
             echo "Successfully executed commands"
