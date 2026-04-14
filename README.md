@@ -4,3 +4,5 @@
 触发action-wjr
 
 This was a triumph. I'm making a note here: huge success.
+
+cg test
