@@ -1,21 +1,42 @@
-name: "test"
+name: backend-test
 
-on: 
-  [push]
+on:
+  push:
+    branches: [main, test/work]
+  pull_request:
+    branches: [main, test/work]
 
 jobs:
-  Test:
-    runs-on: ubuntu-24.04
+  test:
+    runs-on: ubuntu-latest
     steps:
-      - name: "test"
-        uses: appleboy/ssh-action@v1
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run unit and integration tests
+        run: cargo test --all-targets
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@cargo-tarpaulin
+
+      - name: Generate coverage report
+        run: cargo tarpaulin --out Html --out Xml --output-dir coverage
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USERNAME }}
-          password: ${{ secrets.SERVER_KEY }}
-          port: 22
-          script: |
-            whoami
-            cd ~
-            pwd 
-            echo "Successfully executed commands"
+          name: backend-coverage
+          path: coverage
