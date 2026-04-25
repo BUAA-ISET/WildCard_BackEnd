@@ -24,7 +24,12 @@ async fn multi_client_room_session_tracks_join_and_leave() {
         .into(),
     );
 
-    assert!(matches!(wire_message, Message::Text(_)));
+    let expected = format!(
+        "{}:{}:{}",
+        second_join.room_id, second_join.user_id, second_join.action
+    );
+
+    assert_eq!(wire_message, Message::Text(expected.into()));
 }
 
 #[test]
