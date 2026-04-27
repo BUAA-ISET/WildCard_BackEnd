@@ -1,0 +1,15 @@
+[package]
+name = "wildcard_backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "=1.0.228", features = ["derive"] }
+
+[dev-dependencies]
+mockall = "=0.13.1"
+rstest = "=0.18.2"
+serde_json = "=1.0.108"
+tokio = { version = "=1.52.1", features = ["macros", "rt-multi-thread"] }
+tokio-test = "=0.4.3"
+tungstenite = "=0.21.0"
