@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build:
+    name: Upload Release Assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          target: x86_64-unknown-linux-gnu # 交叉编译目标
+          cache: true
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Upload binary to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/wildcard-backend
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
