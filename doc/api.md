@@ -6,12 +6,14 @@
 
 - **URL**: `/api/user/register`
 - **Method**: `POST`
+
 - **请求体 (JSON)**:
-  | 参数 | 类型 | 说明 |
-  | :--- | :--- | :--- |
-  | `email` | String | 邮箱地址 |
-  | `user_name` | String | 用户名 |
-  | `password` | String | 密码 (原始字符串，后台会进行哈希处理) |
+
+  | 参数        | 类型   | 说明                                  |
+  | :---------- | :----- | :------------------------------------ |
+  | `email`     | String | 邮箱地址                              |
+  | `user_name` | String | 用户名                                |
+  | `password`  | String | 密码 (原始字符串，后台会进行哈希处理) |
 
 - **响应**:
   - `200 OK`: 注册成功。
@@ -23,22 +25,30 @@
 
 - **URL**: `/api/user/login`
 - **Method**: `POST`
+
 - **请求体 (JSON)**:
-  | 参数 | 类型 | 说明 |
-  | :--- | :--- | :--- |
+
+  | 参数        | 类型   | 说明   |
+  | :---------- | :----- | :----- |
   | `user_name` | String | 用户名 |
-  | `password` | String | 密码 |
+  | `password`  | String | 密码   |
 
 - **响应**:
   - `200 OK`: 登录成功，返回 token。
-    在两个地方返回：
+
     - **Header**: 在响应头中设置 `Set-Cookie: token=...`，浏览器会自动设置并记录 Cookie，不需要前端操作。
     - **响应**：相应正文也会以 JSON 格式返回
+
       ```json
       {
         "token": "eyJhbGciOiJIUzI1..."
       }
       ```
+
+      | 字段    | 类型   | 说明 |
+      | :------ | :----- | :--- |
+      | `token` | String |      |
+
   - `401 Unauthorized`: 密码错误或用户不存在。
   - 其他错误码见 **错误响应** 节。
 
@@ -58,20 +68,22 @@
 
 - **URL**: `/api/user/find`
 - **Method**: `GET`
+
 - **Query 参数**:
-  | 参数 | 类型 | 说明 |
-  | :--- | :--- | :--- |
+
+  | 参数        | 类型   | 说明           |
+  | :---------- | :----- | :------------- |
   | `user_name` | String | 要查找的用户名 |
 
 - **响应**
   - `200 OK`:
     响应为 JSON 格式。
 
-    | 参数 | 类型 | 说明 |
-    | ：-- | ： -- | ： -- |
-    | `email` | String | 邮箱地址 |
-    | `user_name` | String | 用户名 |
-    | `user_id` | String | 用户 ID |
+    | 字段        | 类型   | 说明     |
+    | :---------- | :----- | :------- |
+    | `email`     | String | 邮箱地址 |
+    | `user_name` | String | 用户名   |
+    | `user_id`   | String | 用户 ID  |
 
   - `404 Not Found`：用户不存在。
   - 其他错误码见 **错误响应** 节。
@@ -88,11 +100,11 @@
   - `200 OK`:
     响应为 JSON 格式。
 
-    | 参数 | 类型 | 说明 |
-    | ：-- | ： -- | ： -- |
-    | `email` | String | 邮箱地址 |
-    | `user_name` | String | 用户名 |
-    | `user_id` | String | 用户 ID |
+    | 字段        | 类型   | 说明     |
+    | :---------- | :----- | :------- |
+    | `email`     | String | 邮箱地址 |
+    | `user_name` | String | 用户名   |
+    | `user_id`   | String | 用户 ID  |
 
   - `401 Unauthorized`：登录认证不通过。
   - 其他错误码见 **错误响应** 节。
