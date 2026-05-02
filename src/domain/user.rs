@@ -1,12 +1,14 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(PartialEq, PartialOrd, Eq, Clone, Serialize, Deserialize, Debug)]
 pub struct UserId(pub Uuid);
 
-impl ToString for UserId {
-    fn to_string(&self) -> String {
-        self.0.to_string()
+impl fmt::Display for UserId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
