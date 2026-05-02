@@ -10,8 +10,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  lint:
-    name: Check
+  rustfmt:
+    name: Rustfmt Check
     runs-on: ubuntu-latest
 
     steps:
@@ -21,11 +21,25 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-          components: rustfmt, clippy
+          components: rustfmt
           cache: true
 
       - name: Rustfmt Check
         uses: actions-rust-lang/rustfmt@v1
+
+  clippy:
+    name: Lint with clippy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+          cache: true
 
       - name: Lint with clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
