@@ -73,10 +73,7 @@ impl UserRepository {
         let result = PasswordHash::new(stored_password).and_then(|parsed_hash| {
             Argon2::default().verify_password(password.as_bytes(), &parsed_hash)
         });
-        match result {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+        result.is_ok()
     }
 }
 
