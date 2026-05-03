@@ -145,7 +145,9 @@ impl Seats {
 
     pub fn assign(&mut self, index: usize, player: UserId) -> Result<(), AppError> {
         if self.contains(player) {
-            return Err(AppError::InvalidInput(format!("Player already in seats")));
+            return Err(AppError::InvalidInput(format!(
+                "Player #{player} already in seats"
+            )));
         }
 
         let seat = self.get_mut(index)?;
@@ -163,7 +165,11 @@ impl Seats {
         let find = self.find_mut(player);
         match find {
             Some((_i, p)) => *p = None,
-            None => return Err(AppError::InvalidInput(format!("Player not in room"))),
+            None => {
+                return Err(AppError::InvalidInput(format!(
+                    "Player #{player} not in room"
+                )));
+            }
         }
         Ok(())
     }
