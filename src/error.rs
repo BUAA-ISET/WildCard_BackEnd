@@ -23,6 +23,8 @@ pub enum AppError {
     InvalidPassword,
     #[error("用户已存在")]
     UserAlreadyExist(String),
+    #[error("分享码用尽")]
+    SharingCodeRunOut,
     #[error("没有登录")]
     Unauthorized(String),
     #[error("加密错误")]
@@ -41,6 +43,7 @@ impl IntoResponse for AppError {
                 (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
             }
             AppError::CryptoError(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+            AppError::SharingCodeRunOut => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
         let body = Json(ErrorResponse {
             message: error_message,

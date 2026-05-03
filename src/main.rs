@@ -4,14 +4,10 @@ mod infrastructure;
 mod interface;
 mod state;
 
+use crate::infrastructure::room::RoomRepository;
 use crate::infrastructure::user::UserRepository;
-use crate::interface::user;
 use crate::state::{GlobalState, JwtSecret};
-
-use axum::{
-    Router,
-    routing::{get, post},
-};
+use axum::Router;
 use dotenv::dotenv;
 use sqlx::PgPool;
 use std::{env, sync::Arc};
@@ -69,20 +65,35 @@ async fn main() {
 
     let state = GlobalState {
         jwt_secret: JwtSecret(secret_key.into_bytes()),
-        user: Arc::new(UserRepository { pool: pool.clone() }),
+        user_repo: Arc::new(UserRepository { pool: pool.clone() }),
+        room_repo: Arc::new(RoomRepository::default()),
     };
 
-    let app = Router::new()
-        .route("/api/user/register", post(user::register))
-        .route("/api/user/find", get(user::find))
-        .route("/api/user/login", post(user::login))
-        .route("/api/user/logout", get(user::logout))
-        .route("/api/user/me", get(user::me))
-        .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans
-        .with_state(state);
+    let app = build_route(state);
 
     let listener = tokio::net::TcpListener::bind(&listen_address)
         .await
         .unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+fn build_route(state: GlobalState) -> Router {
+    use crate::interface::*;
+    use axum::routing::*;
+
+    Router::new()
+        // User api
+        .route("/api/user/register", post(user::register_handler))
+        .route("/api/user/find", get(user::find_handler))
+        .route("/api/user/login", post(user::login_handler))
+        .route("/api/user/logout", any(user::logout_handler))
+        .route("/api/user/me", get(user::me))
+        // Room api
+        .route("/api/room/create", post(room::create_handler))
+        .route("/api/room/find", get(room::find_handler))
+        .route("/api/room/delete", post(room::delete_handler))
+        .route("/api/room/replace_owner", post(room::replace_owner_handler))
+        .route("/api/room/enter", any(room::enter_handler))
+        .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans
+        .with_state(state)
 }
