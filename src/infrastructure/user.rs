@@ -14,6 +14,26 @@ pub struct UserRepository {
 
 impl UserRepository {
     pub async fn register(&self, user: User) -> Result<(), AppError> {
+        let exist_user = sqlx::query!("SELECT id FROM users WHERE users.name = $1", user.name,)
+            .fetch_optional(&self.pool)
+            .await?;
+        if exist_user.is_some() {
+            return Err(AppError::UserAlreadyExist(format!(
+                "用户名 {} 已存在",
+                user.name
+            )));
+        }
+
+        let exist_user = sqlx::query!("SELECT id FROM users WHERE users.email = $1", user.email)
+            .fetch_optional(&self.pool)
+            .await?;
+        if exist_user.is_some() {
+            return Err(AppError::UserAlreadyExist(format!(
+                "邮箱 {} 已存在",
+                user.email
+            )));
+        }
+
         sqlx::query!(
             "INSERT INTO users (id, name, email, password) VALUES ($1, $2, $3, $4)",
             user.id.0,
