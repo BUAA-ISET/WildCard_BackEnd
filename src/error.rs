@@ -21,6 +21,10 @@ pub enum AppError {
     DatabaseError(#[from] sqlx::Error),
     #[error("账号或密码错误")]
     InvalidPassword,
+    #[error("用户已存在")]
+    UserAlreadyExist(String),
+    #[error("分享码用尽")]
+    SharingCodeRunOut,
     #[error("没有登录")]
     Unauthorized(String),
     #[error("加密错误")]
@@ -32,6 +36,7 @@ impl IntoResponse for AppError {
         let (status, error_message) = match self {
             AppError::NotFound => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::UserAlreadyExist(msg) => (StatusCode::CONFLICT, msg),
             AppError::InvalidPassword => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
             AppError::DatabaseError(error) => {
