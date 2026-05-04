@@ -12,8 +12,7 @@ dashmap = "6.1.0"
 dotenv = "0.15.0"
 futures-util = "0.3.32"
 jsonwebtoken ={version= "10.3.0", features=["rust_crypto"]}
-multi_index_map = "0.15.1"
-password-hash = {version="^0.5",features= ["std"] }
+password-hash = {version="0.5",features= ["std"] }
 rand = "0.10.1"
 rand_core = "0.10.1"
 serde = "1.0.228"

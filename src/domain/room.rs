@@ -222,7 +222,7 @@ impl Seats {
     pub fn count(&self) -> usize {
         self.0
             .iter()
-            .map(|play| match play {
+            .map(|player| match player {
                 Some(_) => 1,
                 None => 0,
             })
