@@ -276,7 +276,15 @@ pub async fn enter_handler(
                                 ClientRoomMessage::Emit { name, payload }
                                 | ClientRoomMessage::Command { name, payload } => {
                                     let event = RuleRuntimeEvent { name, payload };
-                                    let _ = room_repo.push_runtime_event(room_id, event);
+                                    if let Err(error) = room_repo.execute_runtime_event(room_id, event) {
+                                        let _ = room_repo.publish_event(
+                                            room_id,
+                                            crate::domain::room::RoomEvent::Error {
+                                                room_id,
+                                                message: error.to_string(),
+                                            },
+                                        );
+                                    }
                                 }
                             }
                         }

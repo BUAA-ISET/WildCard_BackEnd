@@ -1,13 +1,23 @@
 use crate::domain::{
     room::{Room, RoomEvent, RoomId, RoomSnapshot, RoomTable, SharingCode},
-    rule::{RuleDefinition, RuleRuntimeEvent},
+    rule::{
+        RuleDefinition, RuleEngine, RuleExecutionContext, RuleObject, RuleRuntimeEvent, RuleValue,
+    },
     user::UserId,
 };
 use crate::error::AppError;
 use dashmap::DashMap;
 use rand::RngExt;
 use serde_json;
+use std::collections::BTreeMap;
 use tokio::sync::broadcast;
+
+fn native_echo(
+    _ctx: &mut RuleExecutionContext,
+    args: Vec<RuleValue>,
+) -> Result<RuleValue, crate::domain::rule::RuleError> {
+    Ok(args.into_iter().next().unwrap_or(RuleValue::Null))
+}
 
 #[derive(Default, Debug)]
 pub struct RoomRepository {
@@ -144,6 +154,56 @@ impl RoomRepository {
         let payload = serde_json::to_string(&payload)
             .map_err(|error| AppError::InvalidInput(error.to_string()))?;
         let _ = room.tx.send(payload);
+        Ok(())
+    }
+
+    pub fn execute_runtime_event(
+        &self,
+        room_id: RoomId,
+        trigger: RuleRuntimeEvent,
+    ) -> Result<(), AppError> {
+        let rule = self
+            .rooms
+            .get_by_id(room_id)?
+            .rule
+            .clone()
+            .ok_or_else(|| AppError::InvalidInput("room has no bound rule".to_string()))?;
+
+        let engine = RuleEngine::new(rule.clone());
+        let mut context = RuleExecutionContext::default();
+        context.register_native_method("system.echo", native_echo);
+        context.insert_variable("event_name", RuleValue::Text(trigger.name.clone()));
+        context.insert_variable("payload", RuleValue::Object(trigger.payload.clone()));
+        context.insert_object("event", RuleObject::new(trigger.payload.clone()));
+        for (key, value) in &trigger.payload {
+            context.insert_variable(key.clone(), value.clone());
+        }
+
+        let result = engine.execute_flow(&rule.match_flow, &trigger.name, &mut context)?;
+
+        let mut generated_events = Vec::new();
+        generated_events.push(trigger);
+        generated_events.extend(result.events);
+        if let Some(returned) = result.returned {
+            generated_events.push(RuleRuntimeEvent {
+                name: "flow_return".to_string(),
+                payload: BTreeMap::from([("value".to_string(), returned)]),
+            });
+        }
+
+        let mut room = self.rooms.get_mut_by_id(room_id)?;
+        for event in generated_events {
+            room.runtime.push_event(event.clone());
+            let snapshot = room.snapshot();
+            let payload = RoomEvent::RuntimeEvent {
+                room_id,
+                event,
+                snapshot,
+            };
+            let payload = serde_json::to_string(&payload)
+                .map_err(|error| AppError::InvalidInput(error.to_string()))?;
+            let _ = room.tx.send(payload);
+        }
         Ok(())
     }
 
