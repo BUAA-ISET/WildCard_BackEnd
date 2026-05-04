@@ -1,10 +1,12 @@
 use crate::domain::{
-    room::{Room, RoomId, RoomTable, SharingCode},
+    room::{Room, RoomEvent, RoomId, RoomSnapshot, RoomTable, SharingCode},
+    rule::{RuleDefinition, RuleRuntimeEvent},
     user::UserId,
 };
 use crate::error::AppError;
 use dashmap::DashMap;
 use rand::RngExt;
+use serde_json;
 use tokio::sync::broadcast;
 
 #[derive(Default, Debug)]
@@ -36,12 +38,13 @@ impl RoomRepository {
         CreateRoomOption {
             password,
             player_capacity,
+            rule,
         }: CreateRoomOption,
     ) -> Result<dashmap::mapref::one::Ref<'_, RoomId, Room>, AppError> {
         let sharing_code = self
             .alloc_sharing_code()
             .ok_or(AppError::SharingCodeRunOut)?;
-        let room = Room::new(sharing_code, password, owner, player_capacity);
+        let room = Room::new(sharing_code, password, owner, player_capacity, rule);
         Ok(self.rooms.insert(room))
     }
 
@@ -76,14 +79,34 @@ impl RoomRepository {
         user_id: UserId,
         seat_index: usize,
     ) -> Result<(), AppError> {
-        self.rooms
-            .get_mut_by_id(room_id)?
-            .seats
-            .assign(seat_index, user_id)
+        let mut room = self.rooms.get_mut_by_id(room_id)?;
+        room.seats.assign(seat_index, user_id)?;
+        let snapshot = room.snapshot();
+        let event = RoomEvent::PlayerJoined {
+            room_id,
+            user_id,
+            seat_index,
+            snapshot,
+        };
+        let payload = serde_json::to_string(&event)
+            .map_err(|error| AppError::InvalidInput(error.to_string()))?;
+        let _ = room.tx.send(payload);
+        Ok(())
     }
 
     pub fn leave_seat(&self, room_id: RoomId, user_id: UserId) -> Result<(), AppError> {
-        self.rooms.get_mut_by_id(room_id)?.seats.remove(user_id)
+        let mut room = self.rooms.get_mut_by_id(room_id)?;
+        room.seats.remove(user_id)?;
+        let snapshot = room.snapshot();
+        let event = RoomEvent::PlayerLeft {
+            room_id,
+            user_id,
+            snapshot,
+        };
+        let payload = serde_json::to_string(&event)
+            .map_err(|error| AppError::InvalidInput(error.to_string()))?;
+        let _ = room.tx.send(payload);
+        Ok(())
     }
 
     pub fn subscribe_broadcast(
@@ -92,9 +115,52 @@ impl RoomRepository {
     ) -> Result<broadcast::Receiver<String>, AppError> {
         Ok(self.rooms.get_by_id(room_id)?.tx.subscribe())
     }
+
+    pub fn publish_event(&self, room_id: RoomId, event: RoomEvent) -> Result<(), AppError> {
+        let room = self.rooms.get_by_id(room_id)?;
+        let payload = serde_json::to_string(&event)
+            .map_err(|error| AppError::InvalidInput(error.to_string()))?;
+        let _ = room.tx.send(payload);
+        Ok(())
+    }
+
+    pub fn snapshot(&self, room_id: RoomId) -> Result<RoomSnapshot, AppError> {
+        Ok(self.rooms.get_by_id(room_id)?.snapshot())
+    }
+
+    pub fn push_runtime_event(
+        &self,
+        room_id: RoomId,
+        event: RuleRuntimeEvent,
+    ) -> Result<(), AppError> {
+        let mut room = self.rooms.get_mut_by_id(room_id)?;
+        room.runtime.push_event(event.clone());
+        let snapshot = room.snapshot();
+        let payload = RoomEvent::RuntimeEvent {
+            room_id,
+            event,
+            snapshot,
+        };
+        let payload = serde_json::to_string(&payload)
+            .map_err(|error| AppError::InvalidInput(error.to_string()))?;
+        let _ = room.tx.send(payload);
+        Ok(())
+    }
+
+    pub fn set_rule(&self, room_id: RoomId, rule: Option<RuleDefinition>) -> Result<(), AppError> {
+        let mut room = self.rooms.get_mut_by_id(room_id)?;
+        room.rule = rule;
+        let snapshot = room.snapshot();
+        let payload = RoomEvent::StateChanged { room_id, snapshot };
+        let payload = serde_json::to_string(&payload)
+            .map_err(|error| AppError::InvalidInput(error.to_string()))?;
+        let _ = room.tx.send(payload);
+        Ok(())
+    }
 }
 
 pub struct CreateRoomOption {
     pub password: String,
     pub player_capacity: usize,
+    pub rule: Option<RuleDefinition>,
 }

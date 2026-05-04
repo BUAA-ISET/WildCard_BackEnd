@@ -1,6 +1,7 @@
 use super::auth::TokenClaims;
 use crate::domain::{
     room::{Room, RoomId, SharingCode},
+    rule::{RuleDefinition, RuleRuntimeEvent, RuleValue},
     user::UserId,
 };
 use crate::error::AppError;
@@ -9,12 +10,13 @@ use axum::{
     Json,
     extract::{
         Query, State,
-        ws::{self, WebSocket, WebSocketUpgrade},
+        ws::{self, WebSocketUpgrade},
     },
     response::Response,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
@@ -22,6 +24,8 @@ pub struct CreateRequest {
     #[serde(default)]
     pub room_password: String,
     pub player_capacity: usize,
+    #[serde(default)]
+    pub rule: Option<RuleDefinition>,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,6 +54,7 @@ pub async fn create_handler(
     Json(CreateRequest {
         room_password,
         player_capacity,
+        rule,
     }): Json<CreateRequest>,
 ) -> Result<Json<RoomInfoResponse>, AppError> {
     room_repo
@@ -58,6 +63,7 @@ pub async fn create_handler(
             CreateRoomOption {
                 password: room_password,
                 player_capacity,
+                rule,
             },
         )
         .map(|room| Json(RoomInfoResponse::from(room.value())))
@@ -146,6 +152,23 @@ pub struct EnterRequest {
     pub password: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum ClientRoomMessage {
+    Heartbeat,
+    Leave,
+    Emit {
+        name: String,
+        #[serde(default)]
+        payload: BTreeMap<String, RuleValue>,
+    },
+    Command {
+        name: String,
+        #[serde(default)]
+        payload: BTreeMap<String, RuleValue>,
+    },
+}
+
 // Web socket
 #[tracing::instrument]
 pub async fn enter_handler(
@@ -161,7 +184,7 @@ pub async fn enter_handler(
     room_repo.validate_password(room_id, password)?;
     room_repo.take_seat(room_id, user_id, seat_index)?;
 
-    Ok(ws.on_upgrade(move |mut socket| async move {
+    Ok(ws.on_upgrade(move |socket| async move {
         // Subscribe to the room's message
         let mut rx = {
             let rx_option = room_repo.subscribe_broadcast(room_id);
@@ -176,28 +199,73 @@ pub async fn enter_handler(
 
         let (mut sender, mut receiver) = socket.split();
 
-        // Send the room's broadcast to client
-        let mut send_task = tokio::spawn(async move {
-            while let Ok(msg) = rx.recv().await {
-                if sender.send(ws::Message::Text(msg.into())).await.is_err() {
-                    break;
+        if let Ok(snapshot) = room_repo.snapshot(room_id) {
+            let payload = crate::domain::room::RoomEvent::Snapshot(snapshot);
+            if let Ok(serialized) = serde_json::to_string(&payload) {
+                let _ = sender.send(ws::Message::Text(serialized.into())).await;
+            }
+        }
+
+        loop {
+            tokio::select! {
+                received = rx.recv() => {
+                    match received {
+                        Ok(msg) => {
+                            if sender.send(ws::Message::Text(msg.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                incoming = receiver.next() => {
+                    match incoming {
+                        Some(Ok(axum::extract::ws::Message::Text(text))) => {
+                            let message = match serde_json::from_str::<ClientRoomMessage>(&text) {
+                                Ok(message) => message,
+                                Err(error) => {
+                                    let _ = room_repo.publish_event(
+                                        room_id,
+                                        crate::domain::room::RoomEvent::Error {
+                                            room_id,
+                                            message: error.to_string(),
+                                        },
+                                    );
+                                    continue;
+                                }
+                            };
+
+                            match message {
+                                ClientRoomMessage::Heartbeat => {
+                                    if let Ok(snapshot) = room_repo.snapshot(room_id) {
+                                        let _ = room_repo.publish_event(
+                                            room_id,
+                                            crate::domain::room::RoomEvent::StateChanged {
+                                                room_id,
+                                                snapshot,
+                                            },
+                                        );
+                                    }
+                                }
+                                ClientRoomMessage::Leave => break,
+                                ClientRoomMessage::Emit { name, payload }
+                                | ClientRoomMessage::Command { name, payload } => {
+                                    let event = RuleRuntimeEvent { name, payload };
+                                    let _ = room_repo.push_runtime_event(room_id, event);
+                                }
+                            }
+                        }
+                        Some(Ok(axum::extract::ws::Message::Close(_))) | None => break,
+                        Some(Ok(_)) => continue,
+                        Some(Err(_)) => break,
+                    }
                 }
             }
-        });
-
-        // Receive actions from client
-        let mut recv_task = tokio::spawn(async move {
-            while let Some(Ok(axum::extract::ws::Message::Text(text))) = receiver.next().await {
-                // 这里运行你的【规则引擎解释器】逻辑
-                // 如果逻辑导致状态变更，直接调用 tx.send(text)
-                // 注意：此处需要获取 room_repo 的锁来更新房间内玩家的数据状态
-            }
-        });
-
-        // Wait for the connection to end. Handle cleanup logic.
-        tokio::select! {
-            _ = (&mut send_task) => recv_task.abort(),
-            _ = (&mut recv_task) => send_task.abort(),
         }
+
+        let _ = room_repo.leave_seat(room_id, user_id);
     }))
 }

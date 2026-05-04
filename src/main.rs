@@ -94,6 +94,7 @@ fn build_route(state: GlobalState) -> Router {
         .route("/api/room/delete", post(room::delete_handler))
         .route("/api/room/replace_owner", post(room::replace_owner_handler))
         .route("/api/room/enter", any(room::enter_handler))
+        .route("/api/rule/execute", post(rule::execute_rule_handler))
         .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans
         .with_state(state)
 }

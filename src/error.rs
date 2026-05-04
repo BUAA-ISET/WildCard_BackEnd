@@ -6,6 +6,8 @@ use axum::{
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::domain::rule::RuleError;
+
 #[derive(Serialize)]
 struct ErrorResponse {
     message: String,
@@ -17,6 +19,8 @@ pub enum AppError {
     NotFound,
     #[error("输入无效：{0}")]
     InvalidInput(String),
+    #[error("规则错误：{0}")]
+    RuleError(#[from] RuleError),
     #[error("数据库错误：{0}")]
     DatabaseError(#[from] sqlx::Error),
     #[error("账号或密码错误")]
@@ -36,6 +40,7 @@ impl IntoResponse for AppError {
         let (status, error_message) = match self {
             AppError::NotFound => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::RuleError(error) => (StatusCode::BAD_REQUEST, error.to_string()),
             AppError::UserAlreadyExist(msg) => (StatusCode::CONFLICT, msg),
             AppError::InvalidPassword => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),

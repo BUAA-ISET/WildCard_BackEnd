@@ -1,4 +1,7 @@
-use super::user::UserId;
+use super::{
+    rule::{RuleDefinition, RuleRuntimeEvent},
+    user::UserId,
+};
 use crate::error::AppError;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -38,6 +41,10 @@ pub struct Room {
     pub owner: UserId,
     /// Players list in order. `None` means the seat is currently empty.
     pub seats: Seats,
+    /// Optional rule attached to the room.
+    pub rule: Option<RuleDefinition>,
+    /// Runtime state used by websocket-driven game execution.
+    pub runtime: RoomRuntime,
     /// Broadcast sender
     pub tx: broadcast::Sender<String>,
 }
@@ -48,6 +55,7 @@ impl Room {
         password: String,
         owner: UserId,
         player_capacity: usize,
+        rule: Option<RuleDefinition>,
     ) -> Self {
         let (tx, _rx) = broadcast::channel(100);
         Self {
@@ -56,6 +64,8 @@ impl Room {
             password,
             owner,
             seats: Seats::new(player_capacity),
+            rule,
+            runtime: RoomRuntime::default(),
             tx,
         }
     }
@@ -73,6 +83,100 @@ impl Room {
     pub fn sharing_code(&self) -> SharingCode {
         self.sharing_code
     }
+
+    pub fn snapshot(&self) -> RoomSnapshot {
+        RoomSnapshot::from(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RoomPhase {
+    Waiting,
+    Running,
+    Finished,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoomRuntime {
+    pub phase: RoomPhase,
+    pub turn_index: usize,
+    pub last_event: Option<RuleRuntimeEvent>,
+    pub events: Vec<RuleRuntimeEvent>,
+}
+
+impl Default for RoomRuntime {
+    fn default() -> Self {
+        Self {
+            phase: RoomPhase::Waiting,
+            turn_index: 0,
+            last_event: None,
+            events: Vec::new(),
+        }
+    }
+}
+
+impl RoomRuntime {
+    pub fn push_event(&mut self, event: RuleRuntimeEvent) {
+        self.last_event = Some(event.clone());
+        self.events.push(event);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoomSnapshot {
+    pub room_id: RoomId,
+    pub sharing_code: SharingCode,
+    pub owner: UserId,
+    pub players: Vec<Option<UserId>>,
+    pub player_capacity: usize,
+    pub rule_name: Option<String>,
+    pub phase: RoomPhase,
+    pub turn_index: usize,
+}
+
+impl From<&Room> for RoomSnapshot {
+    fn from(room: &Room) -> Self {
+        Self {
+            room_id: room.id(),
+            sharing_code: room.sharing_code(),
+            owner: room.owner,
+            players: room.seats.0.clone(),
+            player_capacity: room.seats.capacity(),
+            rule_name: room.rule.as_ref().map(|rule| rule.name.clone()),
+            phase: room.runtime.phase,
+            turn_index: room.runtime.turn_index,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum RoomEvent {
+    Snapshot(RoomSnapshot),
+    PlayerJoined {
+        room_id: RoomId,
+        user_id: UserId,
+        seat_index: usize,
+        snapshot: RoomSnapshot,
+    },
+    PlayerLeft {
+        room_id: RoomId,
+        user_id: UserId,
+        snapshot: RoomSnapshot,
+    },
+    RuntimeEvent {
+        room_id: RoomId,
+        event: RuleRuntimeEvent,
+        snapshot: RoomSnapshot,
+    },
+    StateChanged {
+        room_id: RoomId,
+        snapshot: RoomSnapshot,
+    },
+    Error {
+        room_id: RoomId,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
