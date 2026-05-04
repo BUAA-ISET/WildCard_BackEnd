@@ -14,26 +14,6 @@ pub struct UserRepository {
 
 impl UserRepository {
     pub async fn register(&self, user: User) -> Result<(), AppError> {
-        let exist_user = sqlx::query!("SELECT id FROM users WHERE users.name = $1", user.name,)
-            .fetch_optional(&self.pool)
-            .await?;
-        if exist_user.is_some() {
-            return Err(AppError::UserAlreadyExist(format!(
-                "用户名 {} 已存在",
-                user.name
-            )));
-        }
-
-        let exist_user = sqlx::query!("SELECT id FROM users WHERE users.email = $1", user.email)
-            .fetch_optional(&self.pool)
-            .await?;
-        if exist_user.is_some() {
-            return Err(AppError::UserAlreadyExist(format!(
-                "邮箱 {} 已存在",
-                user.email
-            )));
-        }
-
         sqlx::query!(
             "INSERT INTO users (id, name, email, password) VALUES ($1, $2, $3, $4)",
             user.id.0,
@@ -42,7 +22,25 @@ impl UserRepository {
             Self::password_hash(&user.password)?
         )
         .execute(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| {
+            if let sqlx::error::Error::Database(db_err) = &e {
+                match db_err.constraint() {
+                    Some("users_name_key") => {
+                        return AppError::UserAlreadyExist(format!("用户名 {} 已存在", user.name));
+                    }
+                    Some("users_email_key") => {
+                        return AppError::UserAlreadyExist(format!("邮箱 {} 已存在", user.email));
+                    }
+                    Some(other) => {
+                        tracing::warn!("Unexpected constraint {other}");
+                    }
+                    None => {}
+                }
+            }
+            tracing::warn!("Database error {e}");
+            AppError::DatabaseError(e)
+        })?;
         Ok(())
     }
 
@@ -52,7 +50,8 @@ impl UserRepository {
             name
         )
         .fetch_optional(&self.pool)
-        .await?
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?
         .map(|user| User {
             id: UserId(user.id),
             name: user.name,
@@ -69,7 +68,8 @@ impl UserRepository {
             user_id.0
         )
         .fetch_optional(&self.pool)
-        .await?
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?
         .map(|user| User {
             id: UserId(user.id),
             name: user.name,
