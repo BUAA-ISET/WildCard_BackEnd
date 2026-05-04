@@ -149,6 +149,14 @@ impl RoomRepository {
 
     pub fn set_rule(&self, room_id: RoomId, rule: Option<RuleDefinition>) -> Result<(), AppError> {
         let mut room = self.rooms.get_mut_by_id(room_id)?;
+        // Prevent overwriting an already-bound rule. Once a rule is bound at room creation
+        // it cannot be changed through this API to ensure room/game integrity.
+        if room.rule.is_some() && rule.is_some() {
+            return Err(AppError::InvalidInput(
+                "room rule already bound and cannot be changed".to_string(),
+            ));
+        }
+
         room.rule = rule;
         let snapshot = room.snapshot();
         let payload = RoomEvent::StateChanged { room_id, snapshot };
@@ -156,6 +164,10 @@ impl RoomRepository {
             .map_err(|error| AppError::InvalidInput(error.to_string()))?;
         let _ = room.tx.send(payload);
         Ok(())
+    }
+
+    pub fn get_rule(&self, room_id: RoomId) -> Result<Option<RuleDefinition>, AppError> {
+        Ok(self.rooms.get_by_id(room_id)?.rule.clone())
     }
 }
 

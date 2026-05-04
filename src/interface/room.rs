@@ -24,7 +24,6 @@ pub struct CreateRequest {
     #[serde(default)]
     pub room_password: String,
     pub player_capacity: usize,
-    #[serde(default)]
     pub rule: Option<RuleDefinition>,
 }
 
@@ -98,6 +97,29 @@ pub async fn replace_owner_handler(
 ) -> Result<(), AppError> {
     room_repo.validate_owner(room_id, user_id)?;
     room_repo.replace_owner(room_id, new_owner)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetRuleRequest {
+    pub room_id: RoomId,
+    #[serde(default)]
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GetRuleResponse {
+    pub room_id: RoomId,
+    pub rule: Option<RuleDefinition>,
+}
+
+#[tracing::instrument]
+pub async fn get_rule_handler(
+    Query(GetRuleRequest { room_id, password }): Query<GetRuleRequest>,
+    State(room_repo): State<Arc<RoomRepository>>,
+) -> Result<Json<GetRuleResponse>, AppError> {
+    room_repo.validate_password(room_id, password)?;
+    let rule = room_repo.get_rule(room_id)?;
+    Ok(Json(GetRuleResponse { room_id, rule }))
 }
 
 #[derive(Debug, Deserialize)]

@@ -111,62 +111,6 @@
   - `401 Unauthorized`：登录认证不通过。
   - 其他错误码见 **错误响应** 节。
 
-## 规则引擎
-
-### 执行规则流程
-
-根据请求体中的规则定义、流程图和初始上下文，执行一次规则流程。
-
-- **URL**: `/api/rule/execute`
-- **Method**: `POST`
-
-- **请求体 (JSON)**:
-
-  | 参数               | 类型                                      | 说明                      |
-  | :----------------- | :---------------------------------------- | :------------------------ |
-  | `rule`             | RuleDefinition                            | 规则顶层定义              |
-  | `flow`             | FlowGraph                                 | 待执行的流程图            |
-  | `start_node`       | String                                    | 起始节点 ID，通常为 `"1"` |
-  | `variables`        | Map[String, RuleValue]，可选，默认 `{}`   | 初始变量上下文            |
-  | `objects`          | Map[String, Map[String, RuleValue]]，可选 | 初始对象上下文            |
-  | `probe_expression` | Expression，可选，默认 `null`             | 执行前先计算一次的表达式  |
-
-- **响应**
-  - `200 OK`:
-    响应为 JSON 格式。
-
-    | 字段           | 类型            | 说明                          |
-    | :------------- | :-------------- | :---------------------------- |
-    | `rule_name`    | String          | 规则名称                      |
-    | `returned`     | RuleValue       | 流程返回值                    |
-    | `events`       | List[RoomEvent] | 执行过程中产生的事件          |
-    | `probe_result` | RuleValue       | `probe_expression` 的计算结果 |
-
-  - `400 Bad Request`：规则流程执行失败或参数非法。
-
-### RuleValue 说明
-
-规则接口中的 `RuleValue` 支持以下类型：
-
-| 类型      | 说明                   |
-| :-------- | :--------------------- |
-| `Integer` | 整数                   |
-| `Enum`    | 枚举实际值，按整数比较 |
-| `Boolean` | 布尔值                 |
-| `Text`    | 文本                   |
-| `List`    | 列表                   |
-| `Object`  | 对象属性表             |
-| `Null`    | 空值                   |
-
-### Event 说明
-
-`events` 数组中的事件格式如下：
-
-| 字段      | 类型                   | 说明           |
-| :-------- | :--------------------- | :------------- |
-| `name`    | String                 | 事件名称       |
-| `payload` | Map[String, RuleValue] | 事件携带的数据 |
-
 ## 房间
 
 ### 创建房间
@@ -236,6 +180,31 @@
 - **响应**
   - `200 OK`：删除成功。
 
+### 获取房间规则
+
+查询房间当前绑定的规则定义。
+
+- **URL**：`/api/room/rule/get`
+- **Method**：`GET`
+
+- **Query 参数**:
+
+  | 参数 | 类型 | 说明 |
+  | :--- | :--- | :--- |
+  | `room_id` | String | 房间 ID |
+  | `password` | String，可选，默认值 `""` | 房间密码 |
+
+- **响应**
+  - `200 OK`:
+
+    | 字段 | 类型 | 说明 |
+    | :--- | :--- | :--- |
+    | `room_id` | String | 房间 ID |
+    | `rule` | RuleDefinition \| null | 当前规则，未绑定则为 `null` |
+
+  - `401 Unauthorized`：房间密码错误。
+  - `404 Not Found`：房间不存在。
+
 ### 加入房间并建立 WebSocket
 
 通过 WebSocket 加入房间并接收房间状态广播。
@@ -279,6 +248,32 @@
   `Emit` 和 `Command` 的 JSON 结构包含 `name` 和 `payload` 两个字段，其中 `payload` 的值类型为 `RuleValue`。
 
 # 错误响应
+
+### RuleDefinition
+
+房间的规则定义（`RuleDefinition`）为房间绑定具体玩法规则的 JSON 对象。主要字段：
+
+- `name` (String): 规则名称。
+- `player_count` (int): 期望的玩家数量（用于校验和脚本中的玩家索引）。
+- `classes` (object): 类型/类定义的映射（可选）。
+  - 每个 `ClassDefinition` 包含 `default_properties`, `user_properties`, `methods` 等。
+- `cardsets` (object): 牌组/集合定义的映射（可选）。
+  - 每个 `CardSetDefinition` 包含 `name`, `properties`, `build_flow`, `compare_flow`, `successors` 等。
+- `match_flow` (FlowGraph): 比赛进行流程的有向图（节点 ID -> 节点）。
+- `end_flow` (FlowGraph): 结束/结算流程的有向图（节点 ID -> 节点）。
+
+FlowGraph 与 FlowNode 的结构为可序列化的节点映射，节点采用 `{ "kind": ..., "data": ... }` 的 tag/content 格式，可包含下列节点类型示例：
+
+- `Start`：流程入口。示例： `{ "kind": "Start", "data": { "kind": "Generic", "next": "1" } }`。
+- `Assignment`：赋值。示例： `{ "kind": "Assignment", "data": { "target": "var", "value": { "kind": "Constant", "data": { "Integer": 1 } }, "next": "2" } }`。
+- `Emit`：向运行时发出事件（会成为 `RuntimeEvent`）。
+- `SortCollection` / `SelectCollection`：对集合进行排序/取样。
+- `Call`：调用对象方法（可触发本地/native 方法）。
+- `Return`：从流程返回值。
+
+完整的 `RuleDefinition` 结构定义请参见后端 `src/domain/rule.rs` 中的 `RuleDefinition`, `ClassDefinition`, `CardSetDefinition`, `FlowGraph` 与 `FlowNodeContent`，前端在构造规则 JSON 时应遵循这些字段与枚举 tag。
+
+绑定策略：房间应在创建时（`/api/room/create` 的 `rule` 字段）指定规则。规则一旦绑定后不可更改。
 
 - `404 Not Found`
   - 没有查找到相应结果。
