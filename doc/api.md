@@ -189,18 +189,18 @@
 
 - **Query 参数**:
 
-  | 参数 | 类型 | 说明 |
-  | :--- | :--- | :--- |
-  | `room_id` | String | 房间 ID |
+  | 参数       | 类型                      | 说明     |
+  | :--------- | :------------------------ | :------- |
+  | `room_id`  | String                    | 房间 ID  |
   | `password` | String，可选，默认值 `""` | 房间密码 |
 
 - **响应**
   - `200 OK`:
 
-    | 字段 | 类型 | 说明 |
-    | :--- | :--- | :--- |
-    | `room_id` | String | 房间 ID |
-    | `rule` | RuleDefinition \| null | 当前规则，未绑定则为 `null` |
+    | 字段      | 类型                   | 说明                        |
+    | :-------- | :--------------------- | :-------------------------- |
+    | `room_id` | String                 | 房间 ID                     |
+    | `rule`    | RuleDefinition \| null | 当前规则，未绑定则为 `null` |
 
   - `401 Unauthorized`：房间密码错误。
   - `404 Not Found`：房间不存在。
@@ -251,29 +251,196 @@
 
 ### RuleDefinition
 
-房间的规则定义（`RuleDefinition`）为房间绑定具体玩法规则的 JSON 对象。主要字段：
+房间的规则定义（`RuleDefinition`）是一个完全由 JSON 表达的对象，前端只需要按下面的结构组装请求体即可，不需要查看后端源码。
 
-- `name` (String): 规则名称。
-- `player_count` (int): 期望的玩家数量（用于校验和脚本中的玩家索引）。
-- `classes` (object): 类型/类定义的映射（可选）。
-  - 每个 `ClassDefinition` 包含 `default_properties`, `user_properties`, `methods` 等。
-- `cardsets` (object): 牌组/集合定义的映射（可选）。
-  - 每个 `CardSetDefinition` 包含 `name`, `properties`, `build_flow`, `compare_flow`, `successors` 等。
-- `match_flow` (FlowGraph): 比赛进行流程的有向图（节点 ID -> 节点）。
-- `end_flow` (FlowGraph): 结束/结算流程的有向图（节点 ID -> 节点）。
+#### 顶层结构
 
-FlowGraph 与 FlowNode 的结构为可序列化的节点映射，节点采用 `{ "kind": ..., "data": ... }` 的 tag/content 格式，可包含下列节点类型示例：
+```json
+{
+  "name": "standard-game",
+  "player_count": 4,
+  "classes": {},
+  "cardsets": {},
+  "match_flow": {},
+  "end_flow": {}
+}
+```
 
-- `Start`：流程入口。示例： `{ "kind": "Start", "data": { "kind": "Generic", "next": "1" } }`。
-- `Assignment`：赋值。示例： `{ "kind": "Assignment", "data": { "target": "var", "value": { "kind": "Constant", "data": { "Integer": 1 } }, "next": "2" } }`。
-- `Emit`：向运行时发出事件（会成为 `RuntimeEvent`）。
-- `SortCollection` / `SelectCollection`：对集合进行排序/取样。
-- `Call`：调用对象方法（可触发本地/native 方法）。
-- `Return`：从流程返回值。
+| 字段           | 类型   | 必填 | 说明                        |
+| :------------- | :----- | :--- | :-------------------------- |
+| `name`         | String | 是   | 规则名称                    |
+| `player_count` | int    | 是   | 玩家人数                    |
+| `classes`      | object | 否   | 类定义表，键是类名          |
+| `cardsets`     | object | 否   | 牌组/集合定义表，键是集合名 |
+| `match_flow`   | object | 否   | 比赛流程图，键是节点 ID     |
+| `end_flow`     | object | 否   | 结束流程图，键是节点 ID     |
 
-完整的 `RuleDefinition` 结构定义请参见后端 `src/domain/rule.rs` 中的 `RuleDefinition`, `ClassDefinition`, `CardSetDefinition`, `FlowGraph` 与 `FlowNodeContent`，前端在构造规则 JSON 时应遵循这些字段与枚举 tag。
+#### `ClassDefinition`
 
-绑定策略：房间应在创建时（`/api/room/create` 的 `rule` 字段）指定规则。规则一旦绑定后不可更改。
+```json
+{
+  "default_properties": {},
+  "user_properties": {},
+  "methods": {}
+}
+```
+
+| 字段                 | 类型   | 必填 | 说明                         |
+| :------------------- | :----- | :--- | :--------------------------- |
+| `default_properties` | object | 否   | 默认属性表，键是属性名       |
+| `user_properties`    | object | 否   | 玩家可配置属性表，键是属性名 |
+| `methods`            | object | 否   | 方法定义表，键是方法名       |
+
+#### `CardSetDefinition`
+
+```json
+{
+  "name": "main-deck",
+  "properties": {},
+  "build_flow": {},
+  "compare_flow": {},
+  "successors": []
+}
+```
+
+| 字段           | 类型     | 必填 | 说明                   |
+| :------------- | :------- | :--- | :--------------------- |
+| `name`         | String   | 是   | 集合名称               |
+| `properties`   | object   | 否   | 卡牌属性表，键是属性名 |
+| `build_flow`   | object   | 否   | 构建集合的流程图       |
+| `compare_flow` | object   | 否   | 比较集合元素的流程图   |
+| `successors`   | string[] | 否   | 后继集合名称列表       |
+
+#### `PropertyDefinition`
+
+```json
+{
+  "type": "Integer",
+  "default": 0,
+  "config": []
+}
+```
+
+| 字段      | 类型           | 必填 | 说明                         |
+| :-------- | :------------- | :--- | :--------------------------- |
+| `type`    | `ValueType`    | 是   | 属性类型                     |
+| `default` | `RuleValue`    | 是   | 默认值                       |
+| `config`  | `EnumOption[]` | 否   | 枚举选项，仅 `Enum` 类型常用 |
+
+`EnumOption` 结构：
+
+```json
+{ "display": "A", "value": 1 }
+```
+
+#### `ValueType`
+
+`type` 字段采用以下枚举之一：
+
+- `Integer`
+- `Collection`，表示集合类型，内部再包一层 `ValueType`
+- `Enum`，表示枚举引用，结构如下：
+
+```json
+{ "Enum": { "class_name": "Card", "property_name": "suit" } }
+```
+
+#### `MethodDefinition` 与 `MethodParameter`
+
+```json
+{
+  "parameters": {},
+  "returns": null,
+  "flow": {}
+}
+```
+
+| 字段         | 类型                | 必填 | 说明                            |
+| :----------- | :------------------ | :--- | :------------------------------ |
+| `parameters` | object              | 否   | 参数表，键是参数名              |
+| `returns`    | `ValueType \| null` | 否   | 返回值类型，`null` 表示无返回值 |
+| `flow`       | object              | 否   | 方法执行流程图                  |
+
+`MethodParameter` 只有一个字段：
+
+```json
+{ "type": "Integer" }
+```
+
+#### `FlowGraph` 与 `FlowNode`
+
+`FlowGraph` 是一个对象，键是节点 ID，值是 `FlowNode`。
+
+`FlowNode` 统一使用 `kind/data` 结构：
+
+```json
+{
+  "kind": "Start",
+  "data": {
+    "kind": "Generic",
+    "next": "2"
+  }
+}
+```
+
+常用 `FlowNodeContent` 类型：
+
+| kind               | 说明                                                                                     |
+| :----------------- | :--------------------------------------------------------------------------------------- |
+| `Start`            | 流程入口，`data.kind` 可选 `Generic`、`Game`、`Method`、`Match`、`Compare`、`Settlement` |
+| `Nop`              | 空操作                                                                                   |
+| `Assignment`       | 赋值，`target` + `value`                                                                 |
+| `Branch`           | 条件分支，`condition` + `on_true` / `on_false`                                           |
+| `SortCollection`   | 对集合排序                                                                               |
+| `SelectCollection` | 从集合选择元素                                                                           |
+| `Emit`             | 产生一个运行时事件                                                                       |
+| `Call`             | 调用对象方法                                                                             |
+| `MatchCards`       | 牌面匹配                                                                                 |
+| `CompareReturn`    | 比较后直接返回 `A/B/Tie`                                                                 |
+| `Return`           | 返回结果                                                                                 |
+
+#### `RuleValue`
+
+`payload`、变量和属性值统一使用 `RuleValue`，支持以下类型：
+
+- `Integer`
+- `Enum`
+- `Boolean`
+- `Text`
+- `List`
+- `Object`
+- `Null`
+
+示例：
+
+```json
+{
+  "Integer": 1
+}
+```
+
+```json
+{
+  "Text": "hello"
+}
+```
+
+```json
+{
+  "Object": {
+    "score": { "Integer": 10 },
+    "name": { "Text": "alice" }
+  }
+}
+```
+
+#### 绑定策略
+
+房间应在创建时通过 `/api/room/create` 的 `rule` 字段一次性绑定规则。绑定后规则不可更改，后端不再提供修改接口。
+
+#### 推荐前端做法
+
+如果前端要动态编辑规则，建议直接按照上面的 JSON 结构生成表单，然后把整个 `RuleDefinition` 对象原样提交给 `/api/room/create`。
 
 - `404 Not Found`
   - 没有查找到相应结果。
