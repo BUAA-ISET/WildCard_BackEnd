@@ -23,8 +23,6 @@ pub enum AppError {
     InvalidPassword,
     #[error("用户已存在")]
     UserAlreadyExist(String),
-    #[error("分享码用尽")]
-    SharingCodeRunOut,
     #[error("没有登录")]
     Unauthorized(String),
     #[error("加密错误")]
