@@ -1,4 +1,3 @@
-use super::mock;
 use wildcard_backend::api::TestApp;
 
 #[test]

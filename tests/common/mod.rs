@@ -30,8 +30,8 @@ pub fn fixture_path(name: &str) -> PathBuf {
 
 #[allow(dead_code)]
 pub fn load_fixture<T: DeserializeOwned>(name: &str) -> T {
-    let contents = fs::read_to_string(fixture_path(name))
-        .expect("fixture file should exist in test-fixtures");
+    let contents =
+        fs::read_to_string(fixture_path(name)).expect("fixture file should exist in test-fixtures");
 
     serde_json::from_str(&contents).expect("fixture file should be valid JSON")
 }

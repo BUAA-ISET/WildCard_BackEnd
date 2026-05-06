@@ -1,5 +1,5 @@
 use super::mock;
-use wildcard_backend::{api::TestApp, TestUser};
+use wildcard_backend::api::TestApp;
 
 #[test]
 fn user_registration_with_empty_username_returns_bad_request() {

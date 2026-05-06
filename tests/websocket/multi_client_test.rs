@@ -1,4 +1,4 @@
-use wildcard_backend::websocket::{RoomEvent, RoomSession};
+use wildcard_backend::websocket::RoomSession;
 
 #[test]
 fn room_session_can_be_created() {

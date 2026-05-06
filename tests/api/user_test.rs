@@ -1,6 +1,6 @@
 use super::{common, mock};
 use mockall::mock;
-use wildcard_backend::{api::TestApp, TestUser};
+use wildcard_backend::{TestUser, api::TestApp};
 
 trait UserRepository {
     fn exists(&self, username: &str) -> bool;
