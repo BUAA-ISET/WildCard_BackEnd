@@ -1,10 +1,5 @@
-use super::auth::TokenClaims;
-use crate::error::AppError;
-use crate::infrastructure::user::UserRepository;
-use crate::{
-    domain::user::{User, UserId},
-    state::JwtSecret,
-};
+use std::sync::Arc;
+
 use axum::{
     Json,
     extract::{Query, State},
@@ -13,42 +8,52 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use jsonwebtoken::{EncodingKey, Header};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use uuid::Uuid;
+
+use super::auth::TokenClaims;
+use crate::error::AppError;
+use crate::infrastructure::user::UserRepository;
+use crate::{
+    domain::user::{User, UserId},
+    state::JwtSecret,
+};
 
 #[derive(Debug, Deserialize)]
-pub struct RegisterRequest {
+pub struct RegisterUserRequest {
     pub email: String,
     pub user_name: String,
     pub password: String,
 }
 
 #[tracing::instrument]
-pub async fn register_handler(
+pub async fn register(
     State(user_repo): State<Arc<UserRepository>>,
-    Json(RegisterRequest {
-        user_name,
-        email,
-        password,
-    }): Json<RegisterRequest>,
+    Json(payload): Json<RegisterUserRequest>,
 ) -> Result<(), AppError> {
-    let user = User::new(user_name, password, email);
+    let user_id = UserId(Uuid::new_v4());
+    let user = User {
+        id: user_id,
+        name: payload.user_name,
+        email: payload.email,
+        password: payload.password,
+    };
     user_repo.register(user).await
 }
 
 #[derive(Debug, Deserialize)]
-pub struct FindRequest {
+pub struct FindUserRequest {
     pub user_name: String,
 }
 
 #[derive(Debug, Serialize)]
-pub struct FindResponse {
+pub struct FindUserResponse {
     pub user_id: UserId,
     pub user_name: String,
     pub email: String,
 }
 
-impl From<User> for FindResponse {
-    fn from(user: User) -> Self {
+impl FindUserResponse {
+    fn from_user(user: User) -> Self {
         Self {
             user_id: user.id,
             user_name: user.name,
@@ -58,14 +63,14 @@ impl From<User> for FindResponse {
 }
 
 #[tracing::instrument]
-pub async fn find_handler(
+pub async fn find(
     State(user_repo): State<Arc<UserRepository>>,
-    Query(FindRequest { user_name }): Query<FindRequest>,
-) -> Result<Json<FindResponse>, AppError> {
+    Query(payload): Query<FindUserRequest>,
+) -> Result<Json<FindUserResponse>, AppError> {
     user_repo
-        .find_by_name(&user_name)
+        .find_by_name(&payload.user_name)
         .await?
-        .map(FindResponse::from)
+        .map(FindUserResponse::from_user)
         .map(Json)
         .ok_or(AppError::NotFound)
 }
@@ -82,18 +87,15 @@ pub struct LoginResponse {
 }
 
 #[tracing::instrument]
-pub async fn login_handler(
+pub async fn login(
     State(JwtSecret(jwt_secret)): State<JwtSecret>,
     State(user_repo): State<Arc<UserRepository>>,
-    Json(LoginRequest {
-        user_name,
-        password,
-    }): Json<LoginRequest>,
+    Json(payload): Json<LoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), AppError> {
-    let user = user_repo.find_by_name(&user_name).await?;
+    let user = user_repo.find_by_name(&payload.user_name).await?;
 
     if let Some(user) = user {
-        let is_valid = UserRepository::check_password(&password, &user.password);
+        let is_valid = UserRepository::check_password(&payload.password, &user.password);
         if !is_valid {
             return Err(AppError::InvalidPassword);
         }
@@ -131,7 +133,7 @@ pub async fn login_handler(
 }
 
 #[tracing::instrument]
-pub async fn logout_handler() -> HeaderMap {
+pub async fn logout() -> HeaderMap {
     let cookie = Cookie::build(("token", ""))
         .path("/")
         .max_age(time::Duration::days(-1))
@@ -148,11 +150,11 @@ pub async fn logout_handler() -> HeaderMap {
 pub async fn me(
     TokenClaims { user_id, .. }: TokenClaims,
     State(user_repo): State<Arc<UserRepository>>,
-) -> Result<Json<FindResponse>, AppError> {
+) -> Result<Json<FindUserResponse>, AppError> {
     user_repo
         .find_by_id(&user_id)
         .await?
-        .map(FindResponse::from)
+        .map(FindUserResponse::from_user)
         .map(Json)
         .ok_or(AppError::Unauthorized("".to_string()))
 }

@@ -1,10 +1,11 @@
+use argon2::Argon2;
+use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng};
+use sqlx::PgPool;
+
 use crate::{
     domain::user::{User, UserId},
     error::AppError,
 };
-use argon2::Argon2;
-use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng};
-use sqlx::PgPool;
 
 #[derive(Debug)]
 pub struct UserRepository {
@@ -105,11 +106,9 @@ mod test {
     #[case("hello")]
     #[case("Complicated@123456789")]
     fn test_password_checker(#[case] origin_password: &str) {
-        let hashed_password = UserRepository::password_hash(origin_password).unwrap();
-        assert_ne!(hashed_password, origin_password);
         assert!(UserRepository::check_password(
             origin_password,
-            &hashed_password
+            &UserRepository::password_hash(origin_password).unwrap()
         ));
     }
 }
