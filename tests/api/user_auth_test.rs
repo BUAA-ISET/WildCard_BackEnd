@@ -1,6 +1,6 @@
 use super::mock;
 use wildcard_backend::api::TestApp;
-
+// modify
 #[test]
 fn user_registration_with_empty_username_returns_bad_request() {
     let mut app = TestApp::new();
@@ -76,4 +76,6 @@ fn test_app_starts_with_empty_users() {
     let response = app.register_user("new_user");
     
     assert_eq!(response.status_code, 201);
-}
+} 
+
+
