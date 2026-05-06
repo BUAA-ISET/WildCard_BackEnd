@@ -1,0 +1,6 @@
+{
+  "id": "rule_001",
+  "name": "basic_rule",
+  "version": 1,
+  "steps": ["draw", "discard"]
+}
