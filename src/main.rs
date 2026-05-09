@@ -5,12 +5,12 @@ mod interface;
 mod state;
 
 use crate::infrastructure::user::UserRepository;
-use crate::interface::user;
+use crate::interface::{room, user};
 use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
     Router,
-    http::{HeaderValue, Method},
+    http::{HeaderName, HeaderValue, Method},
     routing::{get, post},
 };
 use dotenv::dotenv;
@@ -69,16 +69,25 @@ async fn main() {
     // Connect to postgres database.
     let pool = PgPool::connect_lazy(&database_url).expect("Failed to connect to the database");
 
+    let (rooms, room_rules) = room::build_default_room_state();
+
     let state = GlobalState {
         jwt_secret: JwtSecret(secret_key.into_bytes()),
         user: Arc::new(UserRepository { pool: pool.clone() }),
         verification_codes: Arc::new(RwLock::new(Default::default())),
+        rooms,
+        room_rules,
     };
 
     let cors = CorsLayer::new()
         .allow_origin(HeaderValue::from_static("http://localhost:5173"))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
-        .allow_headers([axum::http::header::CONTENT_TYPE])
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            HeaderName::from_static("x-player-id"),
+            HeaderName::from_static("x-player-name"),
+            HeaderName::from_static("x-player-avatar"),
+        ])
         .allow_credentials(true);
 
     let app = Router::new()
@@ -97,6 +106,15 @@ async fn main() {
             "/api/user/password",
             post(user::update_password).put(user::update_password),
         )
+        .route("/api/room/rules", get(room::get_rule_options))
+        .route("/api/room/create", post(room::create_room))
+        .route("/api/room/join", post(room::join_room))
+        .route("/api/room/check-password", get(room::check_room_password))
+        .route("/api/room/current", get(room::get_current_room))
+        .route("/api/room/current/ready", post(room::set_ready))
+        .route("/api/room/current/start", post(room::start_game))
+        .route("/api/room/leave", post(room::leave_room))
+        .route("/api/room/rule/get", get(room::get_room_rule))
         .layer(cors)
         .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans
         .with_state(state);
