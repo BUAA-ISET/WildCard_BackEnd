@@ -1,0 +1,298 @@
+{
+  "classes": {
+    "player": {
+      "default_properties": {},
+      "user_properties": {},
+      "methods": {}
+    },
+    "card": {
+      "default_properties": {
+        "point": {
+          "type": "enum",
+          "default": 1,
+          "config": [
+            {
+              "id": "enum-point-1",
+              "display": "A",
+              "value": 1
+            },
+            {
+              "id": "enum-point-2",
+              "display": "2",
+              "value": 2
+            }
+          ]
+        },
+        "suit": {
+          "type": "enum",
+          "default": 0,
+          "config": [
+            {
+              "id": "enum-suit-0",
+              "display": "S",
+              "value": 0
+            }
+          ]
+        }
+      },
+      "user_properties": {},
+      "methods": {}
+    },
+    "table": {
+      "default_properties": {},
+      "user_properties": {
+        "winner_index": {
+          "type": "int",
+          "default": -1
+        }
+      },
+      "methods": {}
+    }
+  },
+  "cardsets": {
+    "1": {
+      "name": "Single",
+      "properties": {},
+      "build_flow": {
+        "1": {
+          "type": 27,
+          "content": {
+            "next": "2"
+          }
+        },
+        "2": {
+          "type": 7,
+          "content": {
+            "selection": "cards",
+            "next": "3"
+          }
+        },
+        "3": {
+          "type": 8,
+          "content": {
+            "value": 1,
+            "next": "4"
+          }
+        },
+        "4": {
+          "type": 14,
+          "content": {
+            "operator": 0,
+            "lval": "2",
+            "rval": "3",
+            "next": "5"
+          }
+        },
+        "5": {
+          "type": 16,
+          "content": {
+            "condition": "4",
+            "next_true": "6",
+            "next_false": "7"
+          }
+        },
+        "6": {
+          "type": 28,
+          "content": {
+            "result": 1,
+            "properties": {}
+          }
+        },
+        "7": {
+          "type": 28,
+          "content": {
+            "result": 0,
+            "properties": {}
+          }
+        }
+      },
+      "compare_flow": {
+        "1": {
+          "type": 29,
+          "content": {
+            "cardsetA": "Single",
+            "cardsetB": "Single",
+            "next": "2"
+          }
+        },
+        "2": {
+          "type": 5,
+          "content": {
+            "selection": "A",
+            "index": "10",
+            "next": "3"
+          }
+        },
+        "3": {
+          "type": 6,
+          "content": {
+            "operator": 1,
+            "ident": "2",
+            "property": "point",
+            "next": "4"
+          }
+        },
+        "4": {
+          "type": 5,
+          "content": {
+            "selection": "B",
+            "index": "10",
+            "next": "5"
+          }
+        },
+        "5": {
+          "type": 6,
+          "content": {
+            "operator": 1,
+            "ident": "4",
+            "property": "point",
+            "next": "6"
+          }
+        },
+        "6": {
+          "type": 14,
+          "content": {
+            "operator": 1,
+            "lval": "3",
+            "rval": "5",
+            "next": "7"
+          }
+        },
+        "7": {
+          "type": 16,
+          "content": {
+            "condition": "6",
+            "next_true": "8",
+            "next_false": "9"
+          }
+        },
+        "8": {
+          "type": 30,
+          "content": {
+            "result": 0
+          }
+        },
+        "9": {
+          "type": 30,
+          "content": {
+            "result": 1
+          }
+        },
+        "10": {
+          "type": 8,
+          "content": {
+            "value": 0
+          }
+        }
+      },
+      "successors": []
+    }
+  },
+  "cardset_comparisons": {},
+  "match_flow": {
+    "1": {
+      "type": 17,
+      "content": {
+        "next": "2"
+      }
+    },
+    "2": {
+      "type": 20,
+      "content": {
+        "prop_pair": [],
+        "next": "3"
+      },
+      "count": 1
+    },
+    "3": {
+      "type": 21,
+      "content": {
+        "timer": 30,
+        "next": "6"
+      }
+    },
+    "4": {
+      "type": 6,
+      "content": {
+        "operator": 0,
+        "ident": "table_0",
+        "property": "winner_index"
+      }
+    },
+    "5": {
+      "type": 6,
+      "content": {
+        "operator": 0,
+        "ident": "table_0",
+        "property": "player_index"
+      }
+    },
+    "6": {
+      "type": 4,
+      "content": {
+        "component": "4",
+        "rvalue": "5",
+        "next": "7"
+      }
+    },
+    "7": {
+      "type": 18,
+      "content": {}
+    }
+  },
+  "end_flow": {
+    "1": {
+      "type": 23,
+      "content": {
+        "next": "2"
+      }
+    },
+    "2": {
+      "type": 6,
+      "content": {
+        "operator": 0,
+        "ident": "table_0",
+        "property": "settlement_index",
+        "next": "3"
+      }
+    },
+    "3": {
+      "type": 6,
+      "content": {
+        "operator": 0,
+        "ident": "table_0",
+        "property": "winner_index",
+        "next": "4"
+      }
+    },
+    "4": {
+      "type": 14,
+      "content": {
+        "operator": 0,
+        "lval": "2",
+        "rval": "3",
+        "next": "5"
+      }
+    },
+    "5": {
+      "type": 16,
+      "content": {
+        "condition": "4",
+        "next_true": "6",
+        "next_false": "7"
+      }
+    },
+    "6": {
+      "type": 24,
+      "content": {
+        "result": 1
+      }
+    },
+    "7": {
+      "type": 24,
+      "content": {
+        "result": 0
+      }
+    }
+  }
+}

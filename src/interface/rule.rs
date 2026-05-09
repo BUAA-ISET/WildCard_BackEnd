@@ -252,7 +252,7 @@ pub async fn rule_options(
     State(store): State<RuleStore>,
 ) -> Result<Json<ApiResponse<Vec<RuleOption>>>, AppError> {
     let guard = store.read().await;
-    let options = guard
+    let mut options = guard
         .published
         .values()
         .map(|rule| RuleOption {
@@ -261,13 +261,26 @@ pub async fn rule_options(
             player_count: rule.player_count,
             description: rule.description.clone(),
         })
-        .collect();
+        .collect::<Vec<_>>();
+
+    options.sort_by(|left, right| {
+        builtin_rule_sort_key(&left.id)
+            .cmp(&builtin_rule_sort_key(&right.id))
+            .then_with(|| left.name.cmp(&right.name))
+    });
 
     Ok(Json(ApiResponse::success(options)))
 }
 
 pub fn build_rule_store() -> Arc<RwLock<RuleRepository>> {
-    Arc::new(RwLock::new(RuleRepository::default()))
+    let mut repository = RuleRepository::default();
+    for default_rule in build_builtin_rules() {
+        repository
+            .published
+            .insert(default_rule.id.clone(), default_rule);
+    }
+
+    Arc::new(RwLock::new(repository))
 }
 
 fn ensure_owner(owner_id: &str, user_id: &str) -> Result<(), AppError> {
@@ -280,4 +293,133 @@ fn ensure_owner(owner_id: &str, user_id: &str) -> Result<(), AppError> {
 
 fn now_millis() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000
+}
+
+fn build_builtin_test_rule() -> Option<PublishedRule> {
+    let rule_path = concat!(env!("CARGO_MANIFEST_DIR"), "\\test.json");
+    let content = std::fs::read_to_string(rule_path).ok()?;
+    let design: ExportedRuleDesign = serde_json::from_str(&content).ok()?;
+    let runtime = RuleEngine::parse(
+        "测试规则".to_string(),
+        2,
+        "基于根目录 test.json 预置的可联调规则".to_string(),
+        design.clone(),
+    )
+    .ok()?;
+    let now = now_millis();
+
+    Some(PublishedRule {
+        id: "builtin-test-rule".to_string(),
+        owner_id: "system".to_string(),
+        name: "测试规则".to_string(),
+        player_count: 2,
+        description: "基于根目录 test.json 预置的可联调规则".to_string(),
+        version: 1,
+        design,
+        runtime,
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+fn build_builtin_rules() -> Vec<PublishedRule> {
+    let mut rules = Vec::new();
+
+    if let Some(design) = load_builtin_test2_design() {
+        rules.extend(
+            [(
+                "builtin-test2-rule",
+                "Tiny Demo",
+                2,
+                "Minimal playable builtin rule loaded from test2.json.",
+            )]
+            .into_iter()
+            .filter_map(|(id, name, player_count, description)| {
+                build_builtin_rule(id, name, player_count, description, design.clone())
+            }),
+        );
+    }
+
+    if let Some(design) = load_builtin_test_design() {
+        rules.extend(
+            [
+                (
+                    "builtin-test-rule",
+                    "Duel Demo",
+                    2,
+                    "Playable builtin rule loaded from test.json.",
+                ),
+                (
+                    "classic",
+                    "Classic Demo",
+                    2,
+                    "Legacy room rule kept for compatibility. Uses the same duel flow as test.json.",
+                ),
+                (
+                    "party",
+                    "Party Demo",
+                    2,
+                    "Legacy room rule kept for compatibility. Uses the same duel flow as test.json.",
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(id, name, player_count, description)| {
+                build_builtin_rule(id, name, player_count, description, design.clone())
+            }),
+        );
+    }
+
+    rules
+}
+
+fn load_builtin_test_design() -> Option<ExportedRuleDesign> {
+    let rule_path = concat!(env!("CARGO_MANIFEST_DIR"), "\\test.json");
+    let content = std::fs::read_to_string(rule_path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn load_builtin_test2_design() -> Option<ExportedRuleDesign> {
+    let rule_path = concat!(env!("CARGO_MANIFEST_DIR"), "\\test2.json");
+    let content = std::fs::read_to_string(rule_path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn build_builtin_rule(
+    id: &str,
+    name: &str,
+    player_count: u8,
+    description: &str,
+    design: ExportedRuleDesign,
+) -> Option<PublishedRule> {
+    let runtime = RuleEngine::parse(
+        name.to_string(),
+        player_count,
+        description.to_string(),
+        design.clone(),
+    )
+    .ok()?;
+    let now = now_millis();
+
+    Some(PublishedRule {
+        id: id.to_string(),
+        owner_id: "system".to_string(),
+        name: name.to_string(),
+        player_count,
+        description: description.to_string(),
+        version: 1,
+        design,
+        runtime,
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+fn builtin_rule_sort_key(rule_id: &str) -> (u8, &str) {
+    match rule_id {
+        "builtin-test2-rule" => (0, rule_id),
+        "builtin-test-rule" => (1, rule_id),
+        "classic" => (2, rule_id),
+        "party" => (3, rule_id),
+        _ => (4, rule_id),
+    }
 }

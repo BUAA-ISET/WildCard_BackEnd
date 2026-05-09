@@ -4,8 +4,12 @@ use axum::extract::FromRef;
 use tokio::sync::RwLock;
 
 use crate::domain::game::GameSession;
-use crate::domain::room::{Room, RuleCatalogEntry};
 use crate::infrastructure::user::UserRepository;
+use crate::interface::room::RoomRepository;
+use crate::interface::rule::RuleRepository;
+
+pub type RuleStore = Arc<RwLock<RuleRepository>>;
+pub type RoomStore = Arc<RwLock<RoomRepository>>;
 
 #[derive(Clone)]
 pub struct GlobalState {

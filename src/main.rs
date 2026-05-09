@@ -5,7 +5,7 @@ mod interface;
 mod state;
 
 use crate::infrastructure::user::UserRepository;
-use crate::interface::{game, room, rule, user};
+use crate::interface::{room, rule, user};
 use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
@@ -72,8 +72,6 @@ async fn main() {
     // Connect to postgres database.
     let pool = PgPool::connect_lazy(&database_url).expect("Failed to connect to the database");
 
-    let (rooms, room_rules) = room::build_default_room_state();
-
     let state = GlobalState {
         jwt_secret: JwtSecret(secret_key.into_bytes()),
         user: Arc::new(UserRepository { pool: pool.clone() }),
@@ -132,15 +130,15 @@ async fn main() {
         .route("/api/room/current/start", post(room::start_game))
         .route("/api/room/leave", post(room::leave_room))
         .route("/api/room/rule/get", get(room::get_room_rule))
-        .route("/api/games/current", get(game::get_current_game))
-        .route("/api/games/{sessionId}", get(game::get_game_by_session))
+        .route("/api/games/current", get(room::current_game))
+        .route("/api/games/{sessionId}", get(room::get_game))
         .route(
             "/api/games/{sessionId}/actions/{actionId}/play-cards",
-            post(game::play_cards),
+            post(room::play_cards),
         )
         .route(
             "/api/games/{sessionId}/actions/{actionId}/skip",
-            post(game::skip_turn),
+            post(room::skip_action),
         )
         .layer(cors)
         .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans

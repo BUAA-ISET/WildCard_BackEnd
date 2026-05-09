@@ -44,6 +44,8 @@ pub struct Room {
     pub password: Option<String>,
     pub players: Vec<Player>,
     pub status: RoomStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub game_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
