@@ -12,9 +12,9 @@ pub struct GlobalState {
     pub jwt_secret: JwtSecret,
     pub user: Arc<UserRepository>,
     pub verification_codes: Arc<RwLock<HashMap<String, VerificationCodeRecord>>>,
-    pub rooms: Arc<RwLock<HashMap<String, Room>>>,
-    pub room_rules: Arc<HashMap<String, RuleCatalogEntry>>,
     pub games: Arc<RwLock<HashMap<String, GameSession>>>,
+    pub rules: RuleStore,
+    pub rooms: RoomStore,
 }
 
 impl FromRef<GlobalState> for Arc<UserRepository> {
@@ -29,15 +29,15 @@ impl FromRef<GlobalState> for Arc<RwLock<HashMap<String, VerificationCodeRecord>
     }
 }
 
-impl FromRef<GlobalState> for Arc<RwLock<HashMap<String, Room>>> {
+impl FromRef<GlobalState> for RuleStore {
     fn from_ref(input: &GlobalState) -> Self {
-        input.rooms.clone()
+        input.rules.clone()
     }
 }
 
-impl FromRef<GlobalState> for Arc<HashMap<String, RuleCatalogEntry>> {
+impl FromRef<GlobalState> for RoomStore {
     fn from_ref(input: &GlobalState) -> Self {
-        input.room_rules.clone()
+        input.rooms.clone()
     }
 }
 

@@ -5,7 +5,7 @@ mod interface;
 mod state;
 
 use crate::infrastructure::user::UserRepository;
-use crate::interface::{game, room, user};
+use crate::interface::{game, room, rule, user};
 use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
@@ -78,9 +78,10 @@ async fn main() {
         jwt_secret: JwtSecret(secret_key.into_bytes()),
         user: Arc::new(UserRepository { pool: pool.clone() }),
         verification_codes: Arc::new(RwLock::new(Default::default())),
-        rooms,
-        room_rules,
+
         games: Arc::new(RwLock::new(Default::default())),
+        rules: rule::build_rule_store(),
+        rooms: room::build_room_store(),
     };
 
     let cors = CorsLayer::new()
@@ -113,11 +114,20 @@ async fn main() {
             "/api/user/password",
             post(user::update_password).put(user::update_password),
         )
-        .route("/api/room/rules", get(room::get_rule_options))
+        .route("/api/rules/drafts", post(rule::save_draft))
+        .route(
+            "/api/rules/drafts/{draft_id}",
+            get(rule::get_draft).put(rule::update_draft),
+        )
+        .route(
+            "/api/rules/drafts/{draft_id}/publish",
+            post(rule::publish_draft),
+        )
+        .route("/api/room/rules", get(rule::rule_options))
         .route("/api/room/create", post(room::create_room))
         .route("/api/room/join", post(room::join_room))
-        .route("/api/room/check-password", get(room::check_room_password))
-        .route("/api/room/current", get(room::get_current_room))
+        .route("/api/room/check-password", get(room::check_password))
+        .route("/api/room/current", get(room::current_room))
         .route("/api/room/current/ready", post(room::set_ready))
         .route("/api/room/current/start", post(room::start_game))
         .route("/api/room/leave", post(room::leave_room))
