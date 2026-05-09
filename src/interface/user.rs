@@ -64,7 +64,7 @@ pub struct ApiResponse<T> {
 }
 
 impl<T> ApiResponse<T> {
-    fn success(data: T) -> Self {
+    pub(crate) fn success(data: T) -> Self {
         Self {
             success: true,
             data: Some(data),
@@ -72,10 +72,28 @@ impl<T> ApiResponse<T> {
             debug_code: None,
         }
     }
+
+    pub(crate) fn success_with_optional_data(data: Option<T>) -> Self {
+        Self {
+            success: true,
+            data,
+            message: None,
+            debug_code: None,
+        }
+    }
+
+    pub(crate) fn failure(message: String) -> Self {
+        Self {
+            success: false,
+            data: None,
+            message: Some(message),
+            debug_code: None,
+        }
+    }
 }
 
 impl ApiResponse<()> {
-    fn success_without_data(message: Option<String>) -> Self {
+    pub(crate) fn success_without_data(message: Option<String>) -> Self {
         Self {
             success: true,
             data: None,

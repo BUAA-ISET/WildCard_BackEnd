@@ -10,14 +10,17 @@ use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
     Router,
-    http::{HeaderValue, Method},
+    http::{HeaderName, HeaderValue, Method},
     routing::{get, post},
 };
 use dotenv::dotenv;
 use sqlx::PgPool;
 use std::{env, sync::Arc};
 use tokio::sync::RwLock;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    trace::TraceLayer,
+};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -69,6 +72,8 @@ async fn main() {
     // Connect to postgres database.
     let pool = PgPool::connect_lazy(&database_url).expect("Failed to connect to the database");
 
+    let (rooms, room_rules) = room::build_default_room_state();
+
     let state = GlobalState {
         jwt_secret: JwtSecret(secret_key.into_bytes()),
         user: Arc::new(UserRepository { pool: pool.clone() }),
@@ -78,9 +83,17 @@ async fn main() {
     };
 
     let cors = CorsLayer::new()
-        .allow_origin(HeaderValue::from_static("http://localhost:5173"))
+        .allow_origin(AllowOrigin::list([
+            HeaderValue::from_static("http://localhost:5173"),
+            HeaderValue::from_static("http://127.0.0.1:5173"),
+        ]))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
-        .allow_headers([axum::http::header::CONTENT_TYPE])
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            HeaderName::from_static("x-player-id"),
+            HeaderName::from_static("x-player-name"),
+            HeaderName::from_static("x-player-avatar"),
+        ])
         .allow_credentials(true);
 
     let app = Router::new()
