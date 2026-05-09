@@ -17,12 +17,13 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
+    domain::game::GameSession,
     domain::room::{
         GameRuleOption, Player, Room, RoomRuleResponse, RoomStatus, RuleCatalogEntry,
         default_rule_catalog,
     },
     infrastructure::user::UserRepository,
-    interface::{auth::TokenClaims, user::ApiResponse},
+    interface::{auth::TokenClaims, game, user::ApiResponse},
     state::JwtSecret,
 };
 
@@ -32,6 +33,7 @@ const PLAYER_AVATAR_HEADER: &str = "x-player-avatar";
 
 type SharedRoomStore = Arc<RwLock<HashMap<String, Room>>>;
 type SharedRuleCatalog = Arc<HashMap<String, RuleCatalogEntry>>;
+type SharedGameStore = Arc<RwLock<HashMap<String, GameSession>>>;
 
 #[derive(Debug)]
 pub enum RoomApiError {
@@ -59,10 +61,10 @@ impl IntoResponse for RoomApiError {
 }
 
 #[derive(Debug, Clone)]
-struct CurrentParticipant {
-    room_player_id: String,
-    username: String,
-    avatar: String,
+pub(crate) struct CurrentParticipant {
+    pub(crate) room_player_id: String,
+    pub(crate) username: String,
+    pub(crate) avatar: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,7 +136,7 @@ fn parse_claims_from_headers(headers: &HeaderMap, jwt_secret: &[u8]) -> Option<T
     .map(|token_data| token_data.claims)
 }
 
-async fn resolve_current_participant(
+pub(crate) async fn resolve_current_participant(
     headers: &HeaderMap,
     jwt_secret: &JwtSecret,
     user_repo: &Arc<UserRepository>,
@@ -474,6 +476,7 @@ pub async fn start_game(
     State(user_repo): State<Arc<UserRepository>>,
     State(jwt_secret): State<JwtSecret>,
     State(rooms): State<SharedRoomStore>,
+    State(games): State<SharedGameStore>,
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<Option<Room>>>, RoomApiError> {
     let participant = resolve_current_participant(&headers, &jwt_secret, &user_repo).await?;
@@ -492,6 +495,8 @@ pub async fn start_game(
     }
 
     room.status = RoomStatus::Playing;
+    let session = game::create_game_session(room);
+    game::store_game_session(&games, session).await;
     Ok(Json(ApiResponse::success_with_optional_data(Some(Some(
         sanitize_room(room),
     )))))
@@ -501,6 +506,7 @@ pub async fn leave_room(
     State(user_repo): State<Arc<UserRepository>>,
     State(jwt_secret): State<JwtSecret>,
     State(rooms): State<SharedRoomStore>,
+    State(games): State<SharedGameStore>,
     headers: HeaderMap,
 ) -> Result<Json<ApiResponse<()>>, RoomApiError> {
     let participant = resolve_current_participant(&headers, &jwt_secret, &user_repo).await?;
@@ -543,7 +549,10 @@ pub async fn leave_room(
             }
 
             if room.status == RoomStatus::Playing {
-                room.status = RoomStatus::Finished;
+                room.status = RoomStatus::Waiting;
+                for player in &mut room.players {
+                    player.is_ready = player.id == room.host_id;
+                }
             }
 
             false
@@ -553,6 +562,8 @@ pub async fn leave_room(
     if should_remove_room {
         guard.remove(&room_code);
     }
+
+    game::end_game_for_room(&games, &room_code).await;
 
     Ok(Json(ApiResponse::success_without_data(None)))
 }

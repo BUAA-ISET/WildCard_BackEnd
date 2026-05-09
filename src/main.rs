@@ -5,7 +5,7 @@ mod interface;
 mod state;
 
 use crate::infrastructure::user::UserRepository;
-use crate::interface::{room, user};
+use crate::interface::{game, room, user};
 use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
@@ -80,6 +80,7 @@ async fn main() {
         verification_codes: Arc::new(RwLock::new(Default::default())),
         rooms,
         room_rules,
+        games: Arc::new(RwLock::new(Default::default())),
     };
 
     let cors = CorsLayer::new()
@@ -121,6 +122,16 @@ async fn main() {
         .route("/api/room/current/start", post(room::start_game))
         .route("/api/room/leave", post(room::leave_room))
         .route("/api/room/rule/get", get(room::get_room_rule))
+        .route("/api/games/current", get(game::get_current_game))
+        .route("/api/games/{sessionId}", get(game::get_game_by_session))
+        .route(
+            "/api/games/{sessionId}/actions/{actionId}/play-cards",
+            post(game::play_cards),
+        )
+        .route(
+            "/api/games/{sessionId}/actions/{actionId}/skip",
+            post(game::skip_turn),
+        )
         .layer(cors)
         .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans
         .with_state(state);

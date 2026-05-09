@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use axum::extract::FromRef;
 use tokio::sync::RwLock;
 
+use crate::domain::game::GameSession;
 use crate::domain::room::{Room, RuleCatalogEntry};
 use crate::infrastructure::user::UserRepository;
 
@@ -13,6 +14,7 @@ pub struct GlobalState {
     pub verification_codes: Arc<RwLock<HashMap<String, VerificationCodeRecord>>>,
     pub rooms: Arc<RwLock<HashMap<String, Room>>>,
     pub room_rules: Arc<HashMap<String, RuleCatalogEntry>>,
+    pub games: Arc<RwLock<HashMap<String, GameSession>>>,
 }
 
 impl FromRef<GlobalState> for Arc<UserRepository> {
@@ -36,6 +38,12 @@ impl FromRef<GlobalState> for Arc<RwLock<HashMap<String, Room>>> {
 impl FromRef<GlobalState> for Arc<HashMap<String, RuleCatalogEntry>> {
     fn from_ref(input: &GlobalState) -> Self {
         input.room_rules.clone()
+    }
+}
+
+impl FromRef<GlobalState> for Arc<RwLock<HashMap<String, GameSession>>> {
+    fn from_ref(input: &GlobalState) -> Self {
+        input.games.clone()
     }
 }
 
