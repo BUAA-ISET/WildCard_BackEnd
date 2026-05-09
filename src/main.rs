@@ -9,13 +9,15 @@ use crate::interface::user;
 use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
+    http::{HeaderValue, Method},
     Router,
     routing::{get, post},
 };
 use dotenv::dotenv;
 use sqlx::PgPool;
+use tokio::sync::RwLock;
 use std::{env, sync::Arc};
-use tower_http::trace::TraceLayer;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -70,14 +72,26 @@ async fn main() {
     let state = GlobalState {
         jwt_secret: JwtSecret(secret_key.into_bytes()),
         user: Arc::new(UserRepository { pool: pool.clone() }),
+        verification_codes: Arc::new(RwLock::new(Default::default())),
     };
+
+    let cors = CorsLayer::new()
+        .allow_origin(HeaderValue::from_static("http://localhost:5173"))
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
+        .allow_headers([axum::http::header::CONTENT_TYPE])
+        .allow_credentials(true);
 
     let app = Router::new()
         .route("/api/user/register", post(user::register))
+        .route("/api/user/send-code", post(user::send_verification_code))
         .route("/api/user/find", get(user::find))
         .route("/api/user/login", post(user::login))
-        .route("/api/user/logout", get(user::logout))
-        .route("/api/user/me", get(user::me))
+        .route("/api/user/logout", post(user::logout).get(user::logout))
+        .route("/api/user/current", get(user::current))
+        .route("/api/user/me", get(user::current))
+        .route("/api/user/username", post(user::update_username).put(user::update_username))
+        .route("/api/user/password", post(user::update_password).put(user::update_password))
+        .layer(cors)
         .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans
         .with_state(state);
 

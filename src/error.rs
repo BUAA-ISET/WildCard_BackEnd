@@ -8,6 +8,7 @@ use thiserror::Error;
 
 #[derive(Serialize)]
 struct ErrorResponse {
+    success: bool,
     message: String,
 }
 
@@ -43,6 +44,7 @@ impl IntoResponse for AppError {
             AppError::CryptoError(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         };
         let body = Json(ErrorResponse {
+            success: false,
             message: error_message,
         });
         (status, body).into_response()
