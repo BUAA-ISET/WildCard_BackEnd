@@ -8,6 +8,32 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::{
+    domain::game::GameSession,
+    domain::room::{
+        GameRuleOption, Player, Room, RoomRuleResponse, RoomStatus, RuleCatalogEntry,
+        default_rule_catalog,
+    },
+    infrastructure::user::UserRepository,
+    interface::{auth::TokenClaims, game, user::ApiResponse},
+    state::JwtSecret,
+};
+
+const PLAYER_ID_HEADER: &str = "x-player-id";
+const PLAYER_NAME_HEADER: &str = "x-player-name";
+const PLAYER_AVATAR_HEADER: &str = "x-player-avatar";
+
+type SharedRoomStore = Arc<RwLock<HashMap<String, Room>>>;
+type SharedRuleCatalog = Arc<HashMap<String, RuleCatalogEntry>>;
+type SharedGameStore = Arc<RwLock<HashMap<String, GameSession>>>;
+
+#[derive(Debug)]
+pub enum RoomApiError {
+    BadRequest(String),
+    Unauthorized(String),
+    Forbidden(String),
+    NotFound(String),
+    Conflict(String),
+    Internal(String),
     domain::rule_engine::{GameSession, PlayerActionInput, RuleEngine},
     error::AppError,
     interface::{auth::TokenClaims, rule::ApiResponse},
@@ -42,6 +68,11 @@ pub struct Room {
     pub game_session_id: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct CurrentParticipant {
+    pub(crate) room_player_id: String,
+    pub(crate) username: String,
+    pub(crate) avatar: String,
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RoomStatus {
@@ -113,20 +144,17 @@ pub struct CurrentGameQuery {
     pub room_code: Option<String>,
 }
 
-pub async fn create_room(
-    TokenClaims { user_id, .. }: TokenClaims,
-    State(rule_store): State<RuleStore>,
-    State(room_store): State<RoomStore>,
-    Json(payload): Json<CreateRoomRequest>,
-) -> Result<Json<ApiResponse<Room>>, AppError> {
-    let published_rule = {
-        let guard = rule_store.read().await;
-        guard
-            .published
-            .get(&payload.rule_id)
-            .cloned()
-            .ok_or_else(|| AppError::InvalidInput("规则不存在或尚未发布".to_string()))?
-    };
+pub(crate) async fn resolve_current_participant(
+    headers: &HeaderMap,
+    jwt_secret: &JwtSecret,
+    user_repo: &Arc<UserRepository>,
+) -> Result<CurrentParticipant, RoomApiError> {
+    if let Some(TokenClaims { user_id, .. }) = parse_claims_from_headers(headers, &jwt_secret.0) {
+        let user = user_repo
+            .find_by_id(&user_id)
+            .await
+            .map_err(|error| RoomApiError::Internal(error.to_string()))?
+            .ok_or_else(|| RoomApiError::Unauthorized("当前登录用户不存在".to_string()))?;
 
     let player_id = user_id.to_string();
     let mut guard = room_store.write().await;
@@ -485,56 +513,90 @@ pub async fn leave_room(
     }))
 }
 
-pub async fn get_room_rule(
-    State(rule_store): State<RuleStore>,
-    State(room_store): State<RoomStore>,
-    Query(query): Query<RuleQuery>,
-) -> Result<Json<ApiResponse<RoomRuleResponse>>, AppError> {
-    let room = {
-        let guard = room_store.read().await;
-        query
-            .room_id
-            .as_deref()
-            .and_then(|id| {
-                guard
-                    .rooms
-                    .values()
-                    .find(|room| room.id == id || room.code == id)
-                    .cloned()
-            })
-            .ok_or(AppError::NotFound)?
-    };
-    let rule_json = {
-        let guard = rule_store.read().await;
-        let published = guard
-            .published
-            .get(&room.rule_id)
-            .ok_or(AppError::NotFound)?;
-        serde_json::to_value(&published.design)
-            .map_err(|error| AppError::InvalidInput(format!("规则序列化失败：{error}")))?
-    };
+pub async fn start_game(
+    State(user_repo): State<Arc<UserRepository>>,
+    State(jwt_secret): State<JwtSecret>,
+    State(rooms): State<SharedRoomStore>,
+    State(games): State<SharedGameStore>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<Option<Room>>>, RoomApiError> {
+    let participant = resolve_current_participant(&headers, &jwt_secret, &user_repo).await?;
+    let mut guard = rooms.write().await;
+    let room = find_room_by_player_mut(&mut guard, &participant.room_player_id)
+        .ok_or_else(|| RoomApiError::NotFound("房间不存在".to_string()))?;
 
-    Ok(Json(ApiResponse::success(RoomRuleResponse {
-        room_id: room.id,
-        rule: rule_json,
-    })))
+    if room.host_id != participant.room_player_id {
+        return Err(RoomApiError::Forbidden("只有房主可以开始游戏".to_string()));
+    }
+
+    if !is_room_ready_to_start(room) {
+        return Err(RoomApiError::Conflict(
+            "房间人数未满或仍有玩家未准备".to_string(),
+        ));
+    }
+
+    room.status = RoomStatus::Playing;
+    let session = game::create_game_session(room);
+    game::store_game_session(&games, session).await;
+    Ok(Json(ApiResponse::success_with_optional_data(Some(Some(
+        sanitize_room(room),
+    )))))
 }
 
-pub fn build_room_store() -> Arc<RwLock<RoomRepository>> {
-    Arc::new(RwLock::new(RoomRepository::default()))
-}
+pub async fn leave_room(
+    State(user_repo): State<Arc<UserRepository>>,
+    State(jwt_secret): State<JwtSecret>,
+    State(rooms): State<SharedRoomStore>,
+    State(games): State<SharedGameStore>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<()>>, RoomApiError> {
+    let participant = resolve_current_participant(&headers, &jwt_secret, &user_repo).await?;
+    let mut guard = rooms.write().await;
+    let room_code = guard
+        .iter()
+        .find(|(_, room)| {
+            room.players
+                .iter()
+                .any(|player| player.id == participant.room_player_id)
+        })
+        .map(|(code, _)| code.clone());
 
-fn generate_room_code(rooms: &HashMap<String, Room>) -> String {
-    loop {
-        let code = uuid::Uuid::new_v4()
-            .simple()
-            .to_string()
-            .chars()
-            .take(6)
-            .collect::<String>()
-            .to_uppercase();
-        if !rooms.contains_key(&code) {
-            return code;
+    let Some(room_code) = room_code else {
+        return Ok(Json(ApiResponse::success_without_data(None)));
+    };
+
+    let should_remove_room = {
+        let room = guard
+            .get_mut(&room_code)
+            .ok_or_else(|| RoomApiError::NotFound("房间不存在".to_string()))?;
+
+        room.players
+            .retain(|player| player.id != participant.room_player_id);
+
+        if room.players.is_empty() {
+            true
+        } else {
+            if room.host_id == participant.room_player_id
+                && let Some(new_host_id) = next_host_id(&room.players)
+            {
+                room.host_id = new_host_id.clone();
+                if let Some(new_host) = room
+                    .players
+                    .iter_mut()
+                    .find(|player| player.id == new_host_id)
+                {
+                    new_host.is_ready = true;
+                }
+            }
+
+            if room.status == RoomStatus::Playing {
+                room.status = RoomStatus::Waiting;
+                for player in &mut room.players {
+                    player.is_ready = player.id == room.host_id;
+                }
+            }
+
+            false
         }
     }
 }
@@ -550,12 +612,9 @@ fn remove_player_from_room(rooms: &mut HashMap<String, Room>, code: &str, player
         return;
     }
 
-    if room.host_id == player_id {
-        // 房主退出时交给最早加入的玩家，符合文档中的房主自动转让规则。
-        if let Some(next_host) = room.players.iter().min_by_key(|player| player.joined_at) {
-            room.host_id = next_host.id.clone();
-        }
-    }
+    game::end_game_for_room(&games, &room_code).await;
+
+    Ok(Json(ApiResponse::success_without_data(None)))
 }
 
 fn now_millis() -> i64 {

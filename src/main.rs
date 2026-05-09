@@ -5,7 +5,7 @@ mod interface;
 mod state;
 
 use crate::infrastructure::user::UserRepository;
-use crate::interface::{room, rule, user};
+use crate::interface::{game, room, rule, user};
 use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
@@ -78,6 +78,8 @@ async fn main() {
         jwt_secret: JwtSecret(secret_key.into_bytes()),
         user: Arc::new(UserRepository { pool: pool.clone() }),
         verification_codes: Arc::new(RwLock::new(Default::default())),
+
+        games: Arc::new(RwLock::new(Default::default())),
         rules: rule::build_rule_store(),
         rooms: room::build_room_store(),
     };
@@ -130,19 +132,15 @@ async fn main() {
         .route("/api/room/current/start", post(room::start_game))
         .route("/api/room/leave", post(room::leave_room))
         .route("/api/room/rule/get", get(room::get_room_rule))
-        .route("/api/games/current", get(room::current_game))
-        .route("/api/games/{session_id}", get(room::get_game))
+        .route("/api/games/current", get(game::get_current_game))
+        .route("/api/games/{sessionId}", get(game::get_game_by_session))
         .route(
-            "/api/games/{session_id}/actions/{action_id}/play-cards",
-            post(room::play_cards),
+            "/api/games/{sessionId}/actions/{actionId}/play-cards",
+            post(game::play_cards),
         )
         .route(
-            "/api/games/{session_id}/actions/{action_id}/skip",
-            post(room::skip_action),
-        )
-        .route(
-            "/api/games/{session_id}/actions/{action_id}/choose",
-            post(room::choose_action),
+            "/api/games/{sessionId}/actions/{actionId}/skip",
+            post(game::skip_turn),
         )
         .layer(cors)
         .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans

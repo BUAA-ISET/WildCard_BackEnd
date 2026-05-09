@@ -3,19 +3,16 @@ use std::{collections::HashMap, sync::Arc};
 use axum::extract::FromRef;
 use tokio::sync::RwLock;
 
-use crate::{
-    infrastructure::user::UserRepository,
-    interface::{room::RoomRepository, rule::RuleRepository},
-};
-
-pub type RuleStore = Arc<RwLock<RuleRepository>>;
-pub type RoomStore = Arc<RwLock<RoomRepository>>;
+use crate::domain::game::GameSession;
+use crate::domain::room::{Room, RuleCatalogEntry};
+use crate::infrastructure::user::UserRepository;
 
 #[derive(Clone)]
 pub struct GlobalState {
     pub jwt_secret: JwtSecret,
     pub user: Arc<UserRepository>,
     pub verification_codes: Arc<RwLock<HashMap<String, VerificationCodeRecord>>>,
+    pub games: Arc<RwLock<HashMap<String, GameSession>>>,
     pub rules: RuleStore,
     pub rooms: RoomStore,
 }
@@ -41,6 +38,12 @@ impl FromRef<GlobalState> for RuleStore {
 impl FromRef<GlobalState> for RoomStore {
     fn from_ref(input: &GlobalState) -> Self {
         input.rooms.clone()
+    }
+}
+
+impl FromRef<GlobalState> for Arc<RwLock<HashMap<String, GameSession>>> {
+    fn from_ref(input: &GlobalState) -> Self {
+        input.games.clone()
     }
 }
 
