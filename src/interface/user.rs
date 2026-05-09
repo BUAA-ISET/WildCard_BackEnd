@@ -137,7 +137,10 @@ fn validate_password(password: &str, empty_message: &str) -> Result<String, AppE
 }
 
 fn generate_code() -> String {
-    let value = time::OffsetDateTime::now_utc().unix_timestamp_nanos().unsigned_abs() % 900_000;
+    let value = time::OffsetDateTime::now_utc()
+        .unix_timestamp_nanos()
+        .unsigned_abs()
+        % 900_000;
     format!("{:06}", value + 100_000)
 }
 
@@ -204,7 +207,8 @@ pub async fn send_verification_code(
     }
 
     let code = generate_code();
-    let expires_at_unix = (time::OffsetDateTime::now_utc() + time::Duration::minutes(5)).unix_timestamp();
+    let expires_at_unix =
+        (time::OffsetDateTime::now_utc() + time::Duration::minutes(5)).unix_timestamp();
     let mut guard = codes.write().await;
     guard.insert(
         email,
@@ -247,7 +251,9 @@ pub async fn register(
 
         if time::OffsetDateTime::now_utc().unix_timestamp() > stored.expires_at_unix {
             guard.remove(&email);
-            return Err(AppError::InvalidInput("验证码已过期，请重新发送".to_string()));
+            return Err(AppError::InvalidInput(
+                "验证码已过期，请重新发送".to_string(),
+            ));
         }
 
         if stored.code != verification_code {
@@ -260,13 +266,13 @@ pub async fn register(
     let user = User {
         id: UserId(Uuid::new_v4()),
         name: username,
-        email,
+        email: email.clone(),
         password,
     };
     user_repo.register(user).await?;
 
     let created = user_repo
-        .find_by_email(&payload.email.trim().to_lowercase())
+        .find_by_email(&email)
         .await?
         .ok_or(AppError::NotFound)?;
 
@@ -275,7 +281,10 @@ pub async fn register(
     let mut headers = HeaderMap::new();
     headers.insert(header::SET_COOKIE, cookie.to_string().parse().unwrap());
 
-    Ok((headers, Json(ApiResponse::success(UserDto::from_user(created)))))
+    Ok((
+        headers,
+        Json(ApiResponse::success(UserDto::from_user(created))),
+    ))
 }
 
 #[tracing::instrument]
@@ -300,7 +309,10 @@ pub async fn login(
         let mut headers = HeaderMap::new();
         headers.insert(header::SET_COOKIE, cookie.to_string().parse().unwrap());
 
-        Ok((headers, Json(ApiResponse::success(UserDto::from_user(user)))))
+        Ok((
+            headers,
+            Json(ApiResponse::success(UserDto::from_user(user))),
+        ))
     } else {
         Err(AppError::InvalidInput("邮箱或密码错误".to_string()))
     }
@@ -313,7 +325,9 @@ pub async fn logout() -> (HeaderMap, Json<ApiResponse<()>>) {
     header.insert(header::SET_COOKIE, cookie.to_string().parse().unwrap());
     (
         header,
-        Json(ApiResponse::success_without_data(Some("已退出登录".to_string()))),
+        Json(ApiResponse::success_without_data(Some(
+            "已退出登录".to_string(),
+        ))),
     )
 }
 

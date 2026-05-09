@@ -31,24 +31,11 @@ where
         let token = jar
             .get("token")
             .map(|cookie| cookie.value())
-            .ok_or(AppError::Unauthorized("未找到登录标签".to_string()))?;
+            .ok_or(AppError::Unauthorized("未找到登录凭证".to_string()))?;
 
         let token_data = jsonwebtoken::decode::<TokenClaims>(
             token,
             &DecodingKey::from_secret(&jwt_secret),
-            &Validation::default(),
-        )
-        .map_err(|_| AppError::Unauthorized("无效的 Token".to_string()))?;
-
-        Ok(token_data.claims)
-    }
-}
-
-impl TokenClaims {
-    pub fn decode(token: &str, jwt_secret: &[u8]) -> Result<Self, AppError> {
-        let token_data = jsonwebtoken::decode::<TokenClaims>(
-            token,
-            &DecodingKey::from_secret(jwt_secret),
             &Validation::default(),
         )
         .map_err(|_| AppError::Unauthorized("无效的 Token".to_string()))?;

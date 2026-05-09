@@ -9,14 +9,14 @@ use crate::interface::user;
 use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
-    http::{HeaderValue, Method},
     Router,
+    http::{HeaderValue, Method},
     routing::{get, post},
 };
 use dotenv::dotenv;
 use sqlx::PgPool;
-use tokio::sync::RwLock;
 use std::{env, sync::Arc};
+use tokio::sync::RwLock;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -89,8 +89,14 @@ async fn main() {
         .route("/api/user/logout", post(user::logout).get(user::logout))
         .route("/api/user/current", get(user::current))
         .route("/api/user/me", get(user::current))
-        .route("/api/user/username", post(user::update_username).put(user::update_username))
-        .route("/api/user/password", post(user::update_password).put(user::update_password))
+        .route(
+            "/api/user/username",
+            post(user::update_username).put(user::update_username),
+        )
+        .route(
+            "/api/user/password",
+            post(user::update_password).put(user::update_password),
+        )
         .layer(cors)
         .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans
         .with_state(state);
