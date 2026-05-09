@@ -1,0 +1,12 @@
+[2m2026-05-05T07:31:25.745224Z[0m [32m INFO[0m [2mwildcard_backend[0m[2m:[0m Load ".env" file ("/home/ubuntu/backend/WildCard_BackEnd/.env") success.
+[2m2026-05-05T07:31:25.745317Z[0m [32m INFO[0m [2mwildcard_backend[0m[2m:[0m Load environment DATABASE_URL=postgres://postgres:LbA5zPjHm3q2x9@81.70.231.146:5432/wildcard
+[2m2026-05-05T07:31:25.745348Z[0m [32m INFO[0m [2mwildcard_backend[0m[2m:[0m Load environment SECRET_KEY=LbA5zPjHm3q2x9
+[2m2026-05-05T07:31:25.745366Z[0m [32m INFO[0m [2mwildcard_backend[0m[2m:[0m Load environment LISTEN_ADDRESS=0.0.0.0:3000
+[2m2026-05-09T07:58:22.383437Z[0m [32m INFO[0m [2mwildcard_backend[0m[2m:[0m Load ".env" file ("/home/ubuntu/backend/WildCard_BackEnd/.env") success.
+[2m2026-05-09T07:58:22.384564Z[0m [32m INFO[0m [2mwildcard_backend[0m[2m:[0m Load environment DATABASE_URL=postgres://postgres:LbA5zPjHm3q2x9@81.70.231.146:5432/wildcard
+[2m2026-05-09T07:58:22.384612Z[0m [32m INFO[0m [2mwildcard_backend[0m[2m:[0m Load environment SECRET_KEY=LbA5zPjHm3q2x9
+[2m2026-05-09T07:58:22.384636Z[0m [32m INFO[0m [2mwildcard_backend[0m[2m:[0m Load environment LISTEN_ADDRESS=0.0.0.0:3000
+[2m2026-05-09T09:06:48.873933Z[0m [32m INFO[0m [2mwildcard_backend[0m[2m:[0m Load ".env" file ("/home/ubuntu/backend/WildCard_BackEnd/.env") success.
+[2m2026-05-09T09:06:48.874566Z[0m [32m INFO[0m [2mwildcard_backend[0m[2m:[0m Load environment DATABASE_URL=postgres://postgres:LbA5zPjHm3q2x9@81.70.231.146:5432/wildcard
+[2m2026-05-09T09:06:48.874623Z[0m [32m INFO[0m [2mwildcard_backend[0m[2m:[0m Load environment SECRET_KEY=LbA5zPjHm3q2x9
+[2m2026-05-09T09:06:48.874644Z[0m [32m INFO[0m [2mwildcard_backend[0m[2m:[0m Load environment LISTEN_ADDRESS=0.0.0.0:3000

@@ -1,0 +1,124 @@
+nohup: ignoring input and appending output to 'nohup.out'
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.91s
+     Running `target/debug/wildcard-backend`
+nohup: ignoring input
+ Downloading crates ...
+  Downloaded openssl-sys v0.9.115
+  Downloaded bitflags v2.11.1
+  Downloaded openssl v0.10.79
+   Compiling openssl-sys v0.9.115
+   Compiling openssl v0.10.79
+   Compiling bitflags v2.11.1
+   Compiling tower-http v0.6.8
+   Compiling native-tls v0.2.18
+   Compiling sqlx-core v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-macros-core v0.8.6
+   Compiling sqlx-macros v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling wildcard-backend v0.1.0 (/home/ubuntu/backend/WildCard_BackEnd)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 48.94s
+     Running `target/debug/wildcard-backend`
+
+thread 'main' (393873) panicked at src/main.rs:86:10:
+called `Result::unwrap()` on an `Err` value: Os { code: 98, kind: AddrInUse, message: "Address already in use" }
+stack backtrace:
+   0:     0x63727ea1132a - std[e28293b1aa0f68bd]::backtrace_rs::backtrace::libunwind::trace
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:     0x63727ea1132a - std[e28293b1aa0f68bd]::backtrace_rs::backtrace::trace_unsynchronized::<std[e28293b1aa0f68bd]::sys::backtrace::_print_fmt::{closure#1}>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:     0x63727ea1132a - std[e28293b1aa0f68bd]::sys::backtrace::_print_fmt
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/backtrace.rs:74:9
+   3:     0x63727ea1132a - <<std[e28293b1aa0f68bd]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[c1f1a4ba060b9bfa]::fmt::Display>::fmt
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/backtrace.rs:44:26
+   4:     0x63727ea283ca - <core[c1f1a4ba060b9bfa]::fmt::rt::Argument>::fmt
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/fmt/rt.rs:152:76
+   5:     0x63727ea283ca - core[c1f1a4ba060b9bfa]::fmt::write
+   6:     0x63727ea16102 - std[e28293b1aa0f68bd]::io::default_write_fmt::<std[e28293b1aa0f68bd]::sys::stdio::unix::Stderr>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/io/mod.rs:639:11
+   7:     0x63727ea16102 - <std[e28293b1aa0f68bd]::sys::stdio::unix::Stderr as std[e28293b1aa0f68bd]::io::Write>::write_fmt
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/io/mod.rs:1994:13
+   8:     0x63727e9f690f - <std[e28293b1aa0f68bd]::sys::backtrace::BacktraceLock>::print
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/backtrace.rs:47:9
+   9:     0x63727e9f690f - std[e28293b1aa0f68bd]::panicking::default_hook::{closure#0}
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:292:27
+  10:     0x63727ea094c1 - std[e28293b1aa0f68bd]::panicking::default_hook
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:319:9
+  11:     0x63727ea0973b - std[e28293b1aa0f68bd]::panicking::panic_with_hook
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:825:13
+  12:     0x63727e9f69c8 - std[e28293b1aa0f68bd]::panicking::panic_handler::{closure#0}
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:698:13
+  13:     0x63727e9ee0a9 - std[e28293b1aa0f68bd]::sys::backtrace::__rust_end_short_backtrace::<std[e28293b1aa0f68bd]::panicking::panic_handler::{closure#0}, !>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/sys/backtrace.rs:182:18
+  14:     0x63727e9f792d - __rustc[b7974e8690430dd9]::rust_begin_unwind
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:689:5
+  15:     0x63727ea28d5c - core[c1f1a4ba060b9bfa]::panicking::panic_fmt
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/panicking.rs:80:14
+  16:     0x63727ea28aa2 - core[c1f1a4ba060b9bfa]::result::unwrap_failed
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/result.rs:1867:5
+  17:     0x63727e2049cc - core::result::Result<T,E>::unwrap::h04d16277b3f79440
+                               at /home/ubuntu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1233:23
+  18:     0x63727e2049cc - wildcard_backend::main::{{closure}}::h27da1f128184ef41
+                               at /home/ubuntu/backend/WildCard_BackEnd/src/main.rs:86:10
+  19:     0x63727e2512bd - tokio::runtime::park::CachedParkThread::block_on::{{closure}}::hd8ad50fbaaddfe1a
+                               at /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.1/src/runtime/park.rs:284:71
+  20:     0x63727e250898 - tokio::task::coop::with_budget::h5f62a10b25e3c2da
+                               at /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.1/src/task/coop/mod.rs:167:5
+  21:     0x63727e250898 - tokio::task::coop::budget::h4eb2ef6f1cd6723c
+                               at /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.1/src/task/coop/mod.rs:133:5
+  22:     0x63727e250898 - tokio::runtime::park::CachedParkThread::block_on::h42597990e45cf86c
+                               at /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.1/src/runtime/park.rs:284:31
+  23:     0x63727e194bb3 - tokio::runtime::context::blocking::BlockingRegionGuard::block_on::hd4b29cc2bd2f66a5
+                               at /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.1/src/runtime/context/blocking.rs:66:14
+  24:     0x63727e181498 - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::{{closure}}::he7bcbf8700072042
+                               at /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.1/src/runtime/scheduler/multi_thread/mod.rs:92:22
+  25:     0x63727e198117 - tokio::runtime::context::runtime::enter_runtime::h457583757c8011dd
+                               at /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.1/src/runtime/context/runtime.rs:65:16
+  26:     0x63727e181413 - tokio::runtime::scheduler::multi_thread::MultiThread::block_on::h517f325b84392117
+                               at /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.1/src/runtime/scheduler/multi_thread/mod.rs:91:9
+  27:     0x63727e233679 - tokio::runtime::runtime::Runtime::block_on_inner::heb89080c73764627
+                               at /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.1/src/runtime/runtime.rs:373:50
+  28:     0x63727e23390b - tokio::runtime::runtime::Runtime::block_on::h88fe696b2607ea88
+                               at /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.52.1/src/runtime/runtime.rs:345:18
+  29:     0x63727e1e479b - wildcard_backend::main::hde71c140e15a2cc5
+                               at /home/ubuntu/backend/WildCard_BackEnd/src/main.rs:87:46
+  30:     0x63727e222e2b - core::ops::function::FnOnce::call_once::h872fc9e3aa0166f8
+                               at /home/ubuntu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+  31:     0x63727e21ff8e - std::sys::backtrace::__rust_begin_short_backtrace::ha5a37466674d6b8d
+                               at /home/ubuntu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:166:18
+  32:     0x63727e2004f1 - std::rt::lang_start::{{closure}}::h68ad7e2c09e99663
+                               at /home/ubuntu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/rt.rs:206:18
+  33:     0x63727ea087c4 - <&dyn core[c1f1a4ba060b9bfa]::ops::function::Fn<(), Output = i32> + core[c1f1a4ba060b9bfa]::marker::Sync + core[c1f1a4ba060b9bfa]::panic::unwind_safe::RefUnwindSafe as core[c1f1a4ba060b9bfa]::ops::function::FnOnce<()>>::call_once
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/core/src/ops/function.rs:287:21
+  34:     0x63727ea087c4 - std[e28293b1aa0f68bd]::panicking::catch_unwind::do_call::<&dyn core[c1f1a4ba060b9bfa]::ops::function::Fn<(), Output = i32> + core[c1f1a4ba060b9bfa]::marker::Sync + core[c1f1a4ba060b9bfa]::panic::unwind_safe::RefUnwindSafe, i32>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:581:40
+  35:     0x63727ea087c4 - std[e28293b1aa0f68bd]::panicking::catch_unwind::<i32, &dyn core[c1f1a4ba060b9bfa]::ops::function::Fn<(), Output = i32> + core[c1f1a4ba060b9bfa]::marker::Sync + core[c1f1a4ba060b9bfa]::panic::unwind_safe::RefUnwindSafe>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:544:19
+  36:     0x63727ea087c4 - std[e28293b1aa0f68bd]::panic::catch_unwind::<&dyn core[c1f1a4ba060b9bfa]::ops::function::Fn<(), Output = i32> + core[c1f1a4ba060b9bfa]::marker::Sync + core[c1f1a4ba060b9bfa]::panic::unwind_safe::RefUnwindSafe, i32>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panic.rs:359:14
+  37:     0x63727ea087c4 - std[e28293b1aa0f68bd]::rt::lang_start_internal::{closure#0}
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/rt.rs:175:24
+  38:     0x63727ea087c4 - std[e28293b1aa0f68bd]::panicking::catch_unwind::do_call::<std[e28293b1aa0f68bd]::rt::lang_start_internal::{closure#0}, isize>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:581:40
+  39:     0x63727ea087c4 - std[e28293b1aa0f68bd]::panicking::catch_unwind::<isize, std[e28293b1aa0f68bd]::rt::lang_start_internal::{closure#0}>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panicking.rs:544:19
+  40:     0x63727ea087c4 - std[e28293b1aa0f68bd]::panic::catch_unwind::<std[e28293b1aa0f68bd]::rt::lang_start_internal::{closure#0}, isize>
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/panic.rs:359:14
+  41:     0x63727ea087c4 - std[e28293b1aa0f68bd]::rt::lang_start_internal
+                               at /rustc/59807616e1fa2540724bfbac14d7976d7e4a3860/library/std/src/rt.rs:171:5
+  42:     0x63727e2004d7 - std::rt::lang_start::hbcddcf9d6e97036a
+                               at /home/ubuntu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/rt.rs:205:5
+  43:     0x63727e1e485e - main
+  44:     0x70090082a1ca - <unknown>
+  45:     0x70090082a28b - __libc_start_main
+  46:     0x63727e181055 - _start
+  47:                0x0 - <unknown>
+nohup: ignoring input
+   Compiling tower-http v0.6.8
+   Compiling wildcard-backend v0.1.0 (/home/ubuntu/backend/WildCard_BackEnd)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 19.79s
+     Running `target/debug/wildcard-backend`
+nohup: ignoring input
+   Compiling wildcard-backend v0.1.0 (/home/ubuntu/backend/WildCard_BackEnd)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.55s
+     Running `target/debug/wildcard-backend`
