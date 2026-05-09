@@ -54,7 +54,7 @@
 | URL | Method | 描述 | 状态 |
 |-----|--------|------|------|
 | `/api/games/current?roomCode=xxx` | GET | 获取当前对局快照 | ⏳ 待实现 |
-| `/api/games/:sessionId` | GET | 根据会话ID获取对局快照 | ⏳ 待实现 |
+| `/api/games/:sessionId` | GET | 根据会话 ID 获取对局快照 | ⏳ 待实现 |
 | `/api/games/:sessionId/actions/:actionId/play-cards` | POST | 出牌 | ⏳ 待实现 |
 | `/api/games/:sessionId/actions/:actionId/skip` | POST | 跳过 | ⏳ 待实现 |
 | `/api/games/:sessionId/actions/:actionId/choose` | POST | 选择动作选项 | ⏳ 待实现 |

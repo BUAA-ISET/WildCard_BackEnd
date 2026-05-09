@@ -31,7 +31,7 @@ where
         let token = jar
             .get("token")
             .map(|cookie| cookie.value())
-            .ok_or(AppError::Unauthorized("未找到登录标签".to_string()))?;
+            .ok_or(AppError::Unauthorized("未找到登录凭证".to_string()))?;
 
         let token_data = jsonwebtoken::decode::<TokenClaims>(
             token,
