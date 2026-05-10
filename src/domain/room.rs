@@ -42,6 +42,8 @@ pub struct Room {
     pub rule_id: String,
     pub rule_name: String,
     pub password: Option<String>,
+    #[serde(rename = "hasPassword")]
+    pub has_password: bool,
     pub players: Vec<Player>,
     pub status: RoomStatus,
     #[serde(skip_serializing_if = "Option::is_none")]

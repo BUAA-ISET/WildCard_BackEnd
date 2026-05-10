@@ -9,9 +9,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     domain::{
         room::{Player, Room, RoomRuleResponse, RoomStatus},
-        rule_engine::{GameSession, PlayerActionInput, RuleEngine},
+        rule_engine::{GameCard, GameSession, PlayerActionInput, RuleEngine},
     },
     error::AppError,
+    infrastructure::user::UserRepository,
     interface::{auth::TokenClaims, user::ApiResponse},
     state::{RoomStore, RuleStore},
 };
@@ -69,17 +70,93 @@ pub struct CurrentGameQuery {
     pub room_code: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameCardDisplay {
+    pub rank: String,
+    pub suit: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameCardView {
+    pub id: String,
+    pub properties: HashMap<String, i64>,
+    pub display: GameCardDisplay,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GamePlayerView {
+    pub id: String,
+    pub username: String,
+    pub avatar: String,
+    pub card_count: usize,
+    pub public_properties: HashMap<String, i64>,
+    pub online: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameTableView {
+    pub played_cards: Vec<GameCardView>,
+    pub public_properties: HashMap<String, i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingActionView {
+    pub action_id: String,
+    #[serde(rename = "type")]
+    pub action_type: String,
+    pub player_id: String,
+    pub timer: u64,
+    pub deadline_at: Option<i64>,
+    pub can_skip: bool,
+    pub options: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameActionRecordView {
+    pub player_id: String,
+    pub action: String,
+    pub cards: Vec<GameCardView>,
+    pub message: String,
+    pub turn: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameSnapshotView {
+    pub session_id: String,
+    pub room_code: String,
+    pub rule_id: String,
+    pub status: String,
+    pub current_player_id: String,
+    pub round_time: u32,
+    pub deadline_at: Option<i64>,
+    pub players: Vec<GamePlayerView>,
+    pub table: GameTableView,
+    pub hand_cards: Vec<GameCardView>,
+    pub pending_action: Option<PendingActionView>,
+    pub last_action: Option<GameActionRecordView>,
+    pub winner_ids: Vec<String>,
+}
+
 pub fn build_room_store() -> RoomStore {
     Arc::new(tokio::sync::RwLock::new(RoomRepository::default()))
 }
 
 pub async fn create_room(
-    TokenClaims { user_id, .. }: TokenClaims,
+    claims: TokenClaims,
+    State(user_repo): State<Arc<UserRepository>>,
     State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
     Json(payload): Json<CreateRoomRequest>,
 ) -> Result<Json<ApiResponse<Room>>, AppError> {
-    let player_id = user_id.to_string();
+    let player = player_from_claims(&user_repo, &claims, true).await?;
+    let player_id = player.id.clone();
     let published_rule = {
         let rule_guard = rule_store.read().await;
         rule_guard
@@ -93,6 +170,7 @@ pub async fn create_room(
     remove_player_from_existing_room(&mut guard, &player_id);
 
     let code = generate_room_code(&guard.rooms);
+    let password = normalize_password(payload.password);
     let room = Room {
         id: uuid::Uuid::new_v4().to_string(),
         code: code.clone(),
@@ -101,14 +179,9 @@ pub async fn create_room(
         round_time: payload.round_time as u32,
         rule_id: published_rule.id.clone(),
         rule_name: published_rule.name.clone(),
-        password: normalize_password(payload.password),
-        players: vec![Player {
-            id: player_id.clone(),
-            username: format!("玩家{}", &player_id[..8.min(player_id.len())]),
-            avatar: String::new(),
-            is_ready: true,
-            joined_at: Some(now_millis()),
-        }],
+        has_password: password.is_some(),
+        password,
+        players: vec![player],
         status: RoomStatus::Waiting,
         game_session_id: None,
     };
@@ -116,15 +189,17 @@ pub async fn create_room(
     guard.player_rooms.insert(player_id, code.clone());
     guard.rooms.insert(code, room.clone());
 
-    Ok(Json(ApiResponse::success(room)))
+    Ok(Json(ApiResponse::success(public_room(&room))))
 }
 
 pub async fn join_room(
-    TokenClaims { user_id, .. }: TokenClaims,
+    claims: TokenClaims,
+    State(user_repo): State<Arc<UserRepository>>,
     State(room_store): State<RoomStore>,
     Json(payload): Json<JoinRoomRequest>,
 ) -> Result<Json<ApiResponse<Room>>, AppError> {
-    let player_id = user_id.to_string();
+    let player = player_from_claims(&user_repo, &claims, false).await?;
+    let player_id = player.id.clone();
     let room_code = payload.code.trim().to_uppercase();
     let mut guard = room_store.write().await;
     remove_player_from_existing_room(&mut guard, &player_id);
@@ -147,16 +222,10 @@ pub async fn join_room(
     }
 
     if !room.players.iter().any(|player| player.id == player_id) {
-        room.players.push(Player {
-            id: player_id.clone(),
-            username: format!("玩家{}", &player_id[..8.min(player_id.len())]),
-            avatar: String::new(),
-            is_ready: false,
-            joined_at: Some(now_millis()),
-        });
+        room.players.push(player);
     }
 
-    let room = room.clone();
+    let room = public_room(room);
     guard.player_rooms.insert(player_id, room.code.clone());
     Ok(Json(ApiResponse::success(room)))
 }
@@ -200,7 +269,9 @@ pub async fn current_room(
             .cloned()
     };
 
-    Ok(Json(ApiResponse::success_with_optional_data(Some(room))))
+    Ok(Json(ApiResponse::success_with_optional_data(Some(
+        room.map(|room| public_room(&room)),
+    ))))
 }
 
 pub async fn set_ready(
@@ -234,7 +305,7 @@ pub async fn set_ready(
         player.is_ready = payload.is_ready;
     }
 
-    Ok(Json(ApiResponse::success(room.clone())))
+    Ok(Json(ApiResponse::success(public_room(room))))
 }
 
 pub async fn start_game(
@@ -249,7 +320,10 @@ pub async fn start_game(
         .get(&player_id)
         .cloned()
         .ok_or(AppError::NotFound)?;
-    let room = room_guard.rooms.get_mut(&room_code).ok_or(AppError::NotFound)?;
+    let room = room_guard
+        .rooms
+        .get_mut(&room_code)
+        .ok_or(AppError::NotFound)?;
 
     if room.host_id != player_id {
         return Err(AppError::Unauthorized("只有房主可以开始游戏".to_string()));
@@ -269,13 +343,17 @@ pub async fn start_game(
             .ok_or(AppError::NotFound)?;
         published.runtime.clone()
     };
-    let player_ids = room.players.iter().map(|player| player.id.clone()).collect();
+    let player_ids = room
+        .players
+        .iter()
+        .map(|player| player.id.clone())
+        .collect();
     let session = RuleEngine::start_session(room.code.clone(), &runtime_rule, player_ids)?;
     let session_id = session.id.clone();
 
     room.status = RoomStatus::Playing;
     room.game_session_id = Some(session_id.clone());
-    let room_snapshot = room.clone();
+    let room_snapshot = public_room(room);
     let _ = room;
     room_guard.sessions.insert(session_id, session);
 
@@ -309,9 +387,10 @@ pub async fn get_room_rule(
 }
 
 pub async fn current_game(
+    TokenClaims { user_id, .. }: TokenClaims,
     State(room_store): State<RoomStore>,
     Query(query): Query<CurrentGameQuery>,
-) -> Result<Json<ApiResponse<GameSession>>, AppError> {
+) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
     let guard = room_store.read().await;
     let room_code = query
         .room_code
@@ -333,23 +412,50 @@ pub async fn current_game(
             .find(|session| session.room_code == room_code && session.status == "finished")
             .cloned()
     }
-        .ok_or(AppError::NotFound)?;
+    .ok_or(AppError::NotFound)?;
 
-    Ok(Json(ApiResponse::success(session)))
+    let rule_id = guard
+        .rooms
+        .get(&room_code)
+        .map(|room| room.rule_id.clone())
+        .unwrap_or_default();
+    let round_time = guard
+        .rooms
+        .get(&room_code)
+        .map(|room| room.round_time)
+        .unwrap_or(30);
+
+    Ok(Json(ApiResponse::success(build_game_snapshot(
+        &session,
+        &rule_id,
+        round_time,
+        &user_id.to_string(),
+        guard.rooms.get(&room_code),
+    ))))
 }
 
 pub async fn get_game(
+    TokenClaims { user_id, .. }: TokenClaims,
     State(room_store): State<RoomStore>,
     Path(session_id): Path<String>,
-) -> Result<Json<ApiResponse<GameSession>>, AppError> {
+) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
     let guard = room_store.read().await;
     let session = guard
         .sessions
         .get(&session_id)
         .cloned()
         .ok_or(AppError::NotFound)?;
+    let room = guard.rooms.get(&session.room_code);
+    let rule_id = room.map(|room| room.rule_id.clone()).unwrap_or_default();
+    let round_time = room.map(|room| room.round_time).unwrap_or(30);
 
-    Ok(Json(ApiResponse::success(session)))
+    Ok(Json(ApiResponse::success(build_game_snapshot(
+        &session,
+        &rule_id,
+        round_time,
+        &user_id.to_string(),
+        room,
+    ))))
 }
 
 pub async fn play_cards(
@@ -358,7 +464,7 @@ pub async fn play_cards(
     State(room_store): State<RoomStore>,
     Path((session_id, action_id)): Path<(String, String)>,
     Json(payload): Json<PlayerActionInput>,
-) -> Result<Json<ApiResponse<GameSession>>, AppError> {
+) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
     submit_game_action(
         user_id.to_string(),
         rule_store,
@@ -375,7 +481,7 @@ pub async fn skip_action(
     State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
     Path((session_id, action_id)): Path<(String, String)>,
-) -> Result<Json<ApiResponse<GameSession>>, AppError> {
+) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
     submit_game_action(
         user_id.to_string(),
         rule_store,
@@ -390,6 +496,24 @@ pub async fn skip_action(
     .await
 }
 
+pub async fn choose_action(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(rule_store): State<RuleStore>,
+    State(room_store): State<RoomStore>,
+    Path((session_id, action_id)): Path<(String, String)>,
+    Json(payload): Json<PlayerActionInput>,
+) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
+    submit_game_action(
+        user_id.to_string(),
+        rule_store,
+        room_store,
+        session_id,
+        action_id,
+        payload,
+    )
+    .await
+}
+
 async fn submit_game_action(
     player_id: String,
     rule_store: RuleStore,
@@ -397,7 +521,7 @@ async fn submit_game_action(
     session_id: String,
     action_id: String,
     payload: PlayerActionInput,
-) -> Result<Json<ApiResponse<GameSession>>, AppError> {
+) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
     let mut room_guard = room_store.write().await;
     let room_code = room_guard
         .sessions
@@ -438,7 +562,17 @@ async fn submit_game_action(
         }
     }
 
-    Ok(Json(ApiResponse::success(session_snapshot)))
+    let room = room_guard.rooms.get(&room_code);
+    let rule_id = room.map(|room| room.rule_id.clone()).unwrap_or_default();
+    let round_time = room.map(|room| room.round_time).unwrap_or(30);
+
+    Ok(Json(ApiResponse::success(build_game_snapshot(
+        &session_snapshot,
+        &rule_id,
+        round_time,
+        &player_id,
+        room,
+    ))))
 }
 
 pub async fn leave_room(
@@ -470,7 +604,10 @@ fn resolve_room_for_rule_query<'a>(
             .ok_or(AppError::NotFound);
     }
 
-    let room_code = guard.player_rooms.get(player_id).ok_or(AppError::NotFound)?;
+    let room_code = guard
+        .player_rooms
+        .get(player_id)
+        .ok_or(AppError::NotFound)?;
     guard.rooms.get(room_code).ok_or(AppError::NotFound)
 }
 
@@ -543,6 +680,220 @@ fn reset_room_after_game(room: &mut Room) {
     for player in &mut room.players {
         player.is_ready = player.id == room.host_id;
     }
+}
+
+fn public_room(room: &Room) -> Room {
+    let mut room = room.clone();
+    room.has_password = room.password.is_some();
+    room.password = None;
+    room
+}
+
+async fn player_from_claims(
+    user_repo: &UserRepository,
+    claims: &TokenClaims,
+    is_ready: bool,
+) -> Result<Player, AppError> {
+    let user = user_repo
+        .find_by_id(&claims.user_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    Ok(Player {
+        id: user.id.to_string(),
+        username: user.name,
+        avatar: String::new(),
+        is_ready,
+        joined_at: Some(now_millis()),
+    })
+}
+
+fn build_game_snapshot(
+    session: &GameSession,
+    rule_id: &str,
+    round_time: u32,
+    viewer_id: &str,
+    room: Option<&Room>,
+) -> GameSnapshotView {
+    let current_player_id = session
+        .pending_action
+        .as_ref()
+        .map(|action| action.player_id.clone())
+        .unwrap_or_else(|| {
+            let index = session
+                .table
+                .get("player_index")
+                .copied()
+                .unwrap_or_default();
+            session
+                .players
+                .get(index.max(0) as usize)
+                .map(|player| player.id.clone())
+                .unwrap_or_default()
+        });
+    let played_cards = if session.last_action_skipped {
+        Vec::new()
+    } else {
+        session
+            .last_successful_play
+            .as_ref()
+            .map(|play| play.cards.iter().map(to_card_view).collect())
+            .unwrap_or_default()
+    };
+    let hand_cards = session
+        .hands
+        .get(viewer_id)
+        .map(|cards| cards.iter().map(to_card_view).collect())
+        .unwrap_or_default();
+    let winner_ids = single_winner_ids(session);
+    let pending_action = session
+        .pending_action
+        .as_ref()
+        .map(|action| PendingActionView {
+            action_id: action.id.clone(),
+            action_type: if action.component_type == 22 {
+                "choose_option".to_string()
+            } else {
+                "play_cards".to_string()
+            },
+            player_id: action.player_id.clone(),
+            timer: action.timer,
+            deadline_at: Some(now_millis() + action.timer as i64 * 1000),
+            can_skip: session.last_successful_play.is_some(),
+            options: action.options.clone(),
+        });
+
+    GameSnapshotView {
+        session_id: session.id.clone(),
+        room_code: session.room_code.clone(),
+        rule_id: rule_id.to_string(),
+        status: if session.status == "finished" {
+            "finished".to_string()
+        } else if session.active_flow == "end" {
+            "settling".to_string()
+        } else {
+            "playing".to_string()
+        },
+        current_player_id,
+        round_time,
+        deadline_at: pending_action
+            .as_ref()
+            .and_then(|action| action.deadline_at),
+        players: session
+            .players
+            .iter()
+            .map(|player| {
+                let room_player = room.and_then(|room| {
+                    room.players
+                        .iter()
+                        .find(|room_player| room_player.id == player.id)
+                });
+                GamePlayerView {
+                    id: player.id.clone(),
+                    username: room_player
+                        .map(|player| player.username.clone())
+                        .unwrap_or_else(|| format!("玩家{}", player.runtime_index + 1)),
+                    avatar: room_player
+                        .map(|player| player.avatar.clone())
+                        .unwrap_or_default(),
+                    card_count: session
+                        .hands
+                        .get(&player.id)
+                        .map(Vec::len)
+                        .unwrap_or_default(),
+                    public_properties: player.properties.clone(),
+                    online: true,
+                }
+            })
+            .collect(),
+        table: GameTableView {
+            played_cards,
+            public_properties: session.table.clone(),
+        },
+        hand_cards,
+        pending_action,
+        last_action: session.last_action_player_id.as_ref().map(|player_id| {
+            let skipped = session.last_action_skipped;
+            let cards = session
+                .last_action_cards
+                .iter()
+                .map(to_card_view)
+                .collect::<Vec<_>>();
+            GameActionRecordView {
+                player_id: player_id.clone(),
+                action: if skipped { "skip" } else { "play_cards" }.to_string(),
+                message: if skipped {
+                    "Player skipped".to_string()
+                } else {
+                    format!("Played {} card(s)", cards.len())
+                },
+                cards,
+                turn: session.execution_log.len() as u32,
+            }
+        }),
+        winner_ids,
+    }
+}
+
+fn to_card_view(card: &GameCard) -> GameCardView {
+    let point = card
+        .properties
+        .get("point")
+        .copied()
+        .unwrap_or_else(|| card.properties.get("点数").copied().unwrap_or_default());
+    let suit = card
+        .properties
+        .get("suit")
+        .copied()
+        .unwrap_or_else(|| card.properties.get("花色").copied().unwrap_or_default());
+
+    GameCardView {
+        id: card.id.clone(),
+        properties: card.properties.clone(),
+        display: GameCardDisplay {
+            rank: rank_display(point),
+            suit: suit_display(suit),
+        },
+    }
+}
+
+fn single_winner_ids(session: &GameSession) -> Vec<String> {
+    session
+        .players
+        .iter()
+        .filter_map(|player| {
+            session
+                .settlement_results
+                .get(&player.id)
+                .copied()
+                .map(|result| (player.id.clone(), result))
+        })
+        .max_by_key(|(_, result)| *result)
+        .and_then(|(player_id, result)| (result > 0).then_some(player_id))
+        .into_iter()
+        .collect()
+}
+
+fn rank_display(point: i64) -> String {
+    match point {
+        1 | 14 => "A".to_string(),
+        11 => "J".to_string(),
+        12 => "Q".to_string(),
+        13 => "K".to_string(),
+        value if value > 0 => value.to_string(),
+        _ => "?".to_string(),
+    }
+}
+
+fn suit_display(suit: i64) -> String {
+    match suit {
+        0 => "S",
+        1 => "H",
+        2 => "C",
+        3 => "D",
+        _ => "?",
+    }
+    .to_string()
 }
 
 fn next_host_id(players: &[Player]) -> Option<String> {

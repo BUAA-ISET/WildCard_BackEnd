@@ -15,7 +15,7 @@ use axum::{
 };
 use dotenv::dotenv;
 use sqlx::PgPool;
-use std::{env, sync::Arc};
+use std::{collections::HashSet, env, sync::Arc};
 use tokio::sync::RwLock;
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
@@ -82,14 +82,15 @@ async fn main() {
         rooms: room::build_room_store(),
     };
 
+    let allowed_origins = allowed_cors_origins();
     let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::list([
-            HeaderValue::from_static("http://localhost:5173"),
-            HeaderValue::from_static("http://127.0.0.1:5173"),
-        ]))
+        .allow_origin(AllowOrigin::predicate(move |origin, _request_parts| {
+            is_allowed_cors_origin(origin, &allowed_origins)
+        }))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
             HeaderName::from_static("x-player-id"),
             HeaderName::from_static("x-player-name"),
             HeaderName::from_static("x-player-avatar"),
@@ -140,6 +141,10 @@ async fn main() {
             "/api/games/{sessionId}/actions/{actionId}/skip",
             post(room::skip_action),
         )
+        .route(
+            "/api/games/{sessionId}/actions/{actionId}/choose",
+            post(room::choose_action),
+        )
         .layer(cors)
         .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans
         .with_state(state);
@@ -148,4 +153,33 @@ async fn main() {
         .await
         .unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+fn allowed_cors_origins() -> HashSet<String> {
+    let mut origins = HashSet::from([
+        "http://localhost:5173".to_string(),
+        "http://127.0.0.1:5173".to_string(),
+        "http://localhost:8084".to_string(),
+        "http://127.0.0.1:8084".to_string(),
+    ]);
+
+    if let Ok(configured_origins) = env::var("CORS_ALLOWED_ORIGINS") {
+        origins.extend(
+            configured_origins
+                .split(',')
+                .map(str::trim)
+                .filter(|origin| !origin.is_empty())
+                .map(ToOwned::to_owned),
+        );
+    }
+
+    origins
+}
+
+fn is_allowed_cors_origin(origin: &HeaderValue, allowed_origins: &HashSet<String>) -> bool {
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+
+    allowed_origins.contains(origin) || origin.starts_with("http://") && origin.ends_with(":8084")
 }

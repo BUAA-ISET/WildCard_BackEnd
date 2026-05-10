@@ -373,13 +373,13 @@ fn build_builtin_rules() -> Vec<PublishedRule> {
 }
 
 fn load_builtin_test_design() -> Option<ExportedRuleDesign> {
-    let rule_path = concat!(env!("CARGO_MANIFEST_DIR"), "\\test.json");
+    let rule_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test.json");
     let content = std::fs::read_to_string(rule_path).ok()?;
     serde_json::from_str(&content).ok()
 }
 
 fn load_builtin_test2_design() -> Option<ExportedRuleDesign> {
-    let rule_path = concat!(env!("CARGO_MANIFEST_DIR"), "\\test2.json");
+    let rule_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test2.json");
     let content = std::fs::read_to_string(rule_path).ok()?;
     serde_json::from_str(&content).ok()
 }

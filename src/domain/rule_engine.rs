@@ -417,9 +417,7 @@ impl RuleEngine {
                 session.last_action_player_id = Some(player_id.to_string());
                 session.last_action_cards.clear();
                 session.last_action_skipped = false;
-                session
-                    .table
-                    .insert("用户做出的选择".to_string(), choice);
+                session.table.insert("用户做出的选择".to_string(), choice);
                 session
                     .execution_log
                     .push(format!("player {player_id} choose action {choice}"));
@@ -445,11 +443,7 @@ impl RuleEngine {
             }
 
             if session.active_flow == "end"
-                && session
-                    .table
-                    .get("settlement_index")
-                    .copied()
-                    .unwrap_or(0)
+                && session.table.get("settlement_index").copied().unwrap_or(0)
                     >= session.players.len() as i64
             {
                 session.status = "finished".to_string();
@@ -462,10 +456,7 @@ impl RuleEngine {
                 .get(&session.current_node)
                 .cloned()
                 .ok_or_else(|| {
-                    AppError::InvalidInput(format!(
-                        "流程节点 {} 不存在",
-                        session.current_node
-                    ))
+                    AppError::InvalidInput(format!("流程节点 {} 不存在", session.current_node))
                 })?;
 
             let eval_ctx = RuntimeEvalContext {
@@ -497,9 +488,10 @@ impl RuleEngine {
                 16 => {
                     let condition = eval_condition(session, &eval_ctx, &node)?;
                     let label = if condition { "next_true" } else { "next_false" };
-                    session.current_node = next_target(&node.id, flow, label)?.ok_or_else(|| {
-                        AppError::InvalidInput(format!("条件节点 {} 缺少 {}", node.id, label))
-                    })?;
+                    session.current_node =
+                        next_target(&node.id, flow, label)?.ok_or_else(|| {
+                            AppError::InvalidInput(format!("条件节点 {} 缺少 {}", node.id, label))
+                        })?;
                 }
                 18 => {
                     session.active_flow = "end".to_string();
@@ -587,11 +579,16 @@ fn handle_play_cards_action(
         .cloned()
         .ok_or_else(|| AppError::InvalidInput("玩家手牌不存在".to_string()))?;
     let selected_cards = select_cards_from_hand(&hand_cards, &action.cards)?;
-    let previous_round = session.last_successful_play.as_ref().map(|play| {
-        resolve_play_by_cards(runtime_rule, play.cards.clone())
-    }).transpose()?;
-    let current_round =
-        validate_and_resolve_play(runtime_rule, selected_cards.clone(), previous_round.as_ref())?;
+    let previous_round = session
+        .last_successful_play
+        .as_ref()
+        .map(|play| resolve_play_by_cards(runtime_rule, play.cards.clone()))
+        .transpose()?;
+    let current_round = validate_and_resolve_play(
+        runtime_rule,
+        selected_cards.clone(),
+        previous_round.as_ref(),
+    )?;
 
     apply_play_cards(session, player_id, &current_round.cards)?;
     session.last_action_cards = current_round.cards.clone();
@@ -600,13 +597,11 @@ fn handle_play_cards_action(
         player_id: player_id.to_string(),
         cards: current_round.cards.clone(),
     });
-    session
-        .execution_log
-        .push(format!(
-            "player {player_id} played {} as {}",
-            current_round.cards.len(),
-            current_round.cardset_name
-        ));
+    session.execution_log.push(format!(
+        "player {player_id} played {} as {}",
+        current_round.cards.len(),
+        current_round.cardset_name
+    ));
     Ok(())
 }
 
@@ -650,7 +645,9 @@ fn resolve_play_by_cards(
         }
     }
 
-    Err(AppError::InvalidInput("不符合当前规则中的任何牌型".to_string()))
+    Err(AppError::InvalidInput(
+        "不符合当前规则中的任何牌型".to_string(),
+    ))
 }
 
 fn can_beat_previous_round(
@@ -664,7 +661,12 @@ fn can_beat_previous_round(
             .get(&current_round.cardset_id)
             .ok_or_else(|| AppError::InvalidInput("当前牌型不存在".to_string()))?;
 
-        return execute_same_cardset_compare(runtime_rule, current_cardset, current_round, previous_round);
+        return execute_same_cardset_compare(
+            runtime_rule,
+            current_cardset,
+            current_round,
+            previous_round,
+        );
     }
 
     if let Some(result) =
@@ -677,7 +679,9 @@ fn can_beat_previous_round(
         .cardset_flows
         .get(&current_round.cardset_id)
         .ok_or_else(|| AppError::InvalidInput("当前牌型不存在".to_string()))?;
-    Ok(current_cardset.successors.contains(&previous_round.cardset_id))
+    Ok(current_cardset
+        .successors
+        .contains(&previous_round.cardset_id))
 }
 
 fn execute_same_cardset_compare(
@@ -694,11 +698,7 @@ fn execute_same_cardset_compare(
         cardset_a: to_cardset_runtime_result(current_round),
         cardset_b: to_cardset_runtime_result(previous_round),
     };
-    let result = execute_compare_flow_result(
-        runtime_rule,
-        &cardset.compare_flow,
-        &compare_ctx,
-    )?;
+    let result = execute_compare_flow_result(runtime_rule, &cardset.compare_flow, &compare_ctx)?;
     Ok(matches!(result, CompareFlowResult::A))
 }
 
@@ -739,11 +739,8 @@ fn execute_cross_cardset_compare(
                 cardset_a: to_cardset_runtime_result(previous_round),
                 cardset_b: to_cardset_runtime_result(current_round),
             };
-            let result = execute_compare_flow_result(
-                runtime_rule,
-                &comparison.compare_flow,
-                &compare_ctx,
-            )?;
+            let result =
+                execute_compare_flow_result(runtime_rule, &comparison.compare_flow, &compare_ctx)?;
             return Ok(Some(match result {
                 CompareFlowResult::A => CompareFlowResult::B,
                 CompareFlowResult::B => CompareFlowResult::A,
@@ -775,7 +772,9 @@ fn execute_cardset_build_flow(
             .nodes
             .get(&current_node)
             .cloned()
-            .ok_or_else(|| AppError::InvalidInput(format!("牌型构建节点 {} 不存在", current_node)))?;
+            .ok_or_else(|| {
+                AppError::InvalidInput(format!("牌型构建节点 {} 不存在", current_node))
+            })?;
 
         if !visited.insert(current_node.clone()) && node.component_type == 16 {
             return Err(AppError::InvalidInput("牌型构建流程存在死循环".to_string()));
@@ -808,17 +807,16 @@ fn execute_cardset_build_flow(
             }
             28 => {
                 let content = node_content(&node)?;
-                let matched = content
-                    .get("result")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0)
-                    == 1;
+                let matched = content.get("result").and_then(Value::as_i64).unwrap_or(0) == 1;
                 let properties = if matched {
                     extract_int_properties(content.get("properties"))
                 } else {
                     HashMap::new()
                 };
-                return Ok(CardsetBuildResult { matched, properties });
+                return Ok(CardsetBuildResult {
+                    matched,
+                    properties,
+                });
             }
             _ => {
                 let _ = eval_value_for_cardset(&eval_ctx, &node.id)?;
@@ -844,11 +842,9 @@ fn execute_compare_flow_result(
             return Err(AppError::InvalidInput("牌型比较流程未返回结果".to_string()));
         }
 
-        let node = flow
-            .nodes
-            .get(&current_node)
-            .cloned()
-            .ok_or_else(|| AppError::InvalidInput(format!("牌型比较节点 {} 不存在", current_node)))?;
+        let node = flow.nodes.get(&current_node).cloned().ok_or_else(|| {
+            AppError::InvalidInput(format!("牌型比较节点 {} 不存在", current_node))
+        })?;
 
         if !visited.insert(current_node.clone()) && node.component_type == 16 {
             return Err(AppError::InvalidInput("牌型比较流程存在死循环".to_string()));
@@ -871,9 +867,12 @@ fn execute_compare_flow_result(
             }
             16 => {
                 let branch = eval_condition_for_cardset(&eval_ctx, &node)?;
-                current_node =
-                    next_target(&node.id, flow, if branch { "next_true" } else { "next_false" })?
-                        .unwrap_or_default();
+                current_node = next_target(
+                    &node.id,
+                    flow,
+                    if branch { "next_true" } else { "next_false" },
+                )?
+                .unwrap_or_default();
             }
             30 => {
                 let result = content_i64(&node, "result").unwrap_or(0);
@@ -936,7 +935,10 @@ fn build_table(runtime_rule: &RuntimeRule, players: &[GamePlayer]) -> HashMap<St
     table.insert("cur_max".to_string(), -1);
     table.insert("settlement_index".to_string(), 0);
     if let Some(first_player) = players.first() {
-        table.insert("本轮应出牌者".to_string(), resolve_player_numeric_id(first_player));
+        table.insert(
+            "本轮应出牌者".to_string(),
+            resolve_player_numeric_id(first_player),
+        );
     }
     table
 }
@@ -1065,11 +1067,17 @@ fn execute_deal(session: &mut GameSession, node: &RuntimeNode) -> Result<(), App
                 .iter()
                 .position(|card| card_matches_filters(card, &filters))
             else {
-                return Err(AppError::InvalidInput("牌堆中没有符合条件的卡牌".to_string()));
+                return Err(AppError::InvalidInput(
+                    "牌堆中没有符合条件的卡牌".to_string(),
+                ));
             };
 
             let card = session.deck.remove(index);
-            session.hands.entry(player_id.clone()).or_default().push(card);
+            session
+                .hands
+                .entry(player_id.clone())
+                .or_default()
+                .push(card);
             update_player_hand_count(session, player_id);
         }
     }
@@ -1150,9 +1158,7 @@ fn truthy(value: EvalValue) -> Result<bool, AppError> {
         EvalValue::Cardset(cardset) => !cardset.cards.is_empty(),
         EvalValue::Table => true,
         EvalValue::None => false,
-        EvalValue::Player(_)
-        | EvalValue::PlayerIndex(_)
-        | EvalValue::Card(_) => true,
+        EvalValue::Player(_) | EvalValue::PlayerIndex(_) | EvalValue::Card(_) => true,
     })
 }
 
@@ -1297,8 +1303,16 @@ fn eval_value(
         }
         12 => {
             let operator = content.get("operator").and_then(Value::as_i64).unwrap_or(0);
-            let left = truthy(eval_value(session, eval_ctx, content_string(content, "lval")?)?)?;
-            let right = truthy(eval_value(session, eval_ctx, content_string(content, "rval")?)?)?;
+            let left = truthy(eval_value(
+                session,
+                eval_ctx,
+                content_string(content, "lval")?,
+            )?)?;
+            let right = truthy(eval_value(
+                session,
+                eval_ctx,
+                content_string(content, "rval")?,
+            )?)?;
             Ok(EvalValue::Bool(if operator == 0 {
                 left && right
             } else {
@@ -1314,19 +1328,26 @@ fn eval_value(
             let operator = content.get("operator").and_then(Value::as_i64).unwrap_or(0);
             let left = eval_scalar_value(session, eval_ctx, content_string(content, "lval")?)?;
             let right = eval_scalar_value(session, eval_ctx, content_string(content, "rval")?)?;
-            Ok(EvalValue::Bool(compare_scalar_values(operator, left, right)))
+            Ok(EvalValue::Bool(compare_scalar_values(
+                operator, left, right,
+            )))
         }
         15 => {
-            let card_set = content.get("card_set").and_then(Value::as_str).unwrap_or("");
-            let card_rule = content.get("card_rule").and_then(Value::as_str).unwrap_or("");
+            let card_set = content
+                .get("card_set")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let card_rule = content
+                .get("card_rule")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let cards = resolve_card_set_reference(session, eval_ctx, card_set)?;
-            let result = match_cardset_by_rule_id(runtime_rule_from_ctx(eval_ctx), card_rule, cards)?;
+            let result =
+                match_cardset_by_rule_id(runtime_rule_from_ctx(eval_ctx), card_rule, cards)?;
             Ok(EvalValue::Bool(result.matched))
         }
         21 => Ok(EvalValue::Cards(session.last_action_cards.clone())),
-        22 => Ok(EvalValue::Choice(
-            table_i64(session, "用户做出的选择"),
-        )),
+        22 => Ok(EvalValue::Choice(table_i64(session, "用户做出的选择"))),
         27 => Ok(EvalValue::Cards(
             eval_ctx.cardset_input.unwrap_or(&[]).to_vec(),
         )),
@@ -1343,7 +1364,10 @@ fn eval_property_access(
 ) -> Result<EvalValue, AppError> {
     let operator = content.get("operator").and_then(Value::as_i64).unwrap_or(0);
     let ident = content.get("ident").and_then(Value::as_str).unwrap_or("");
-    let property = content.get("property").and_then(Value::as_str).unwrap_or("");
+    let property = content
+        .get("property")
+        .and_then(Value::as_str)
+        .unwrap_or("");
 
     match operator {
         0 => resolve_object_property_access(session, eval_ctx, ident, property),
@@ -1384,12 +1408,14 @@ fn resolve_component_property_access(
                 }
             }
             21 => {
-                if property == "用户打出的牌组" || property == "鐢ㄦ埛鎵撳嚭鐨勭墝缁?" {
+                if property == "用户打出的牌组" || property == "鐢ㄦ埛鎵撳嚭鐨勭墝缁?"
+                {
                     return Ok(EvalValue::Cards(session.last_action_cards.clone()));
                 }
             }
             22 => {
-                if property == "用户做出的选择" || property == "鐢ㄦ埛鍋氬嚭鐨勯€夋嫨" {
+                if property == "用户做出的选择" || property == "鐢ㄦ埛鍋氬嚭鐨勯€夋嫨"
+                {
                     return Ok(EvalValue::Choice(table_i64(session, "用户做出的选择")));
                 }
             }
@@ -1406,7 +1432,8 @@ fn resolve_component_property_access(
                 }
             }
             25 => {
-                if property == "调用该方法的对象" || property == "璋冪敤璇ユ柟娉曠殑瀵硅薄" {
+                if property == "调用该方法的对象" || property == "璋冪敤璇ユ柟娉曠殑瀵硅薄"
+                {
                     if let Some(method_ctx) = eval_ctx.method {
                         if let Some(value) =
                             resolve_object_reference(session, eval_ctx, &method_ctx.object_ref)?
@@ -1470,7 +1497,8 @@ fn resolve_collection_property_access(
     match source {
         EvalValue::Table => access_table_property(session, eval_ctx, property),
         EvalValue::Cards(cards) => Ok(EvalValue::Ints(
-            cards.into_iter()
+            cards
+                .into_iter()
                 .map(|card| {
                     scalar_from_value(access_property_from_value(property, EvalValue::Card(card))?)
                 })
@@ -1480,7 +1508,10 @@ fn resolve_collection_property_access(
             players
                 .into_iter()
                 .map(|player| {
-                    scalar_from_value(access_property_from_value(property, EvalValue::Player(player))?)
+                    scalar_from_value(access_property_from_value(
+                        property,
+                        EvalValue::Player(player),
+                    )?)
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         )),
@@ -1545,7 +1576,11 @@ fn access_property_from_value(property: &str, source: EvalValue) -> Result<EvalV
                 }
             }
             Ok(EvalValue::Int(
-                cardset.properties.get(property).copied().unwrap_or_default(),
+                cardset
+                    .properties
+                    .get(property)
+                    .copied()
+                    .unwrap_or_default(),
             ))
         }
         EvalValue::Choice(choice) => Ok(if property == "用户做出的选择" {
@@ -1597,7 +1632,10 @@ fn assign_property(
     let content = node_content(node)?;
     let operator = content.get("operator").and_then(Value::as_i64).unwrap_or(0);
     let ident = content.get("ident").and_then(Value::as_str).unwrap_or("");
-    let property = content.get("property").and_then(Value::as_str).unwrap_or("");
+    let property = content
+        .get("property")
+        .and_then(Value::as_str)
+        .unwrap_or("");
 
     if operator != 0 {
         return Err(AppError::InvalidInput(
@@ -1621,9 +1659,7 @@ fn assign_property(
         return Ok(());
     }
 
-    Err(AppError::InvalidInput(format!(
-        "无法识别赋值对象 {ident}"
-    )))
+    Err(AppError::InvalidInput(format!("无法识别赋值对象 {ident}")))
 }
 
 fn apply_play_cards(
@@ -1639,7 +1675,10 @@ fn apply_play_cards(
 
     for played_card in played_cards {
         let Some(index) = hand.iter().position(|card| card.id == played_card.id) else {
-            return Err(AppError::InvalidInput(format!("玩家没有手牌 {}", played_card.id)));
+            return Err(AppError::InvalidInput(format!(
+                "玩家没有手牌 {}",
+                played_card.id
+            )));
         };
         removed.push(hand.remove(index));
     }
@@ -1708,9 +1747,7 @@ fn update_player_hand_count(session: &mut GameSession, player_id: &str) {
         .find(|player| player.id == player_id)
     {
         player.properties.insert("手牌数".to_string(), count);
-        player
-            .properties
-            .insert("鎵嬬墝鏁?".to_string(), count);
+        player.properties.insert("鎵嬬墝鏁?".to_string(), count);
     }
 }
 
@@ -1780,7 +1817,10 @@ fn validate_design(design: &ExportedRuleDesign) -> Result<(), AppError> {
 
     validate_unique_names(
         "牌型名称",
-        design.cardsets.values().map(|cardset| cardset.name.as_str()),
+        design
+            .cardsets
+            .values()
+            .map(|cardset| cardset.name.as_str()),
     )?;
 
     for (class_name, class_def) in &design.classes {
@@ -1994,14 +2034,18 @@ fn resolve_keyword_value(
         normalized,
         "A" | "a" | "cardsetA" | "cardset_a" | "currentRound" | "current_round" | "牌型A"
     ) {
-        return Ok(eval_ctx.compare.map(|compare| EvalValue::Cardset(compare.cardset_a.clone())));
+        return Ok(eval_ctx
+            .compare
+            .map(|compare| EvalValue::Cardset(compare.cardset_a.clone())));
     }
 
     if matches!(
         normalized,
         "B" | "b" | "cardsetB" | "cardset_b" | "previousRound" | "previous_round" | "牌型B"
     ) {
-        return Ok(eval_ctx.compare.map(|compare| EvalValue::Cardset(compare.cardset_b.clone())));
+        return Ok(eval_ctx
+            .compare
+            .map(|compare| EvalValue::Cardset(compare.cardset_b.clone())));
     }
 
     if normalized == "玩家" {
@@ -2020,7 +2064,9 @@ fn resolve_keyword_value(
             return Ok(Some(value.clone()));
         }
         if normalized == "调用该方法的对象" {
-            if let Some(value) = resolve_object_reference(session, eval_ctx, &method_ctx.object_ref)? {
+            if let Some(value) =
+                resolve_object_reference(session, eval_ctx, &method_ctx.object_ref)?
+            {
                 return Ok(Some(value));
             }
         }
@@ -2078,14 +2124,19 @@ fn execute_sort(
             Ok(EvalValue::Cards(cards))
         }
         EvalValue::Players(mut players) => {
-            players.sort_by(|left, right| compare_player_by_sort_properties(left, right, &properties));
+            players
+                .sort_by(|left, right| compare_player_by_sort_properties(left, right, &properties));
             Ok(EvalValue::Players(players))
         }
         other => Ok(other),
     }
 }
 
-fn compare_card_by_sort_properties(left: &GameCard, right: &GameCard, properties: &[Value]) -> Ordering {
+fn compare_card_by_sort_properties(
+    left: &GameCard,
+    right: &GameCard,
+    properties: &[Value],
+) -> Ordering {
     for property in properties {
         let name = property.get("name").and_then(Value::as_str).unwrap_or("");
         let order = property.get("order").and_then(Value::as_i64).unwrap_or(1);
@@ -2150,7 +2201,11 @@ fn evaluate_collection_logic_cards(
         }
     }
 
-    Ok(if operator == 0 { matched_any } else { !cards.is_empty() })
+    Ok(if operator == 0 {
+        matched_any
+    } else {
+        !cards.is_empty()
+    })
 }
 
 fn evaluate_collection_logic_players(
@@ -2193,7 +2248,11 @@ fn evaluate_collection_logic_players(
         }
     }
 
-    Ok(if operator == 0 { matched_any } else { !players.is_empty() })
+    Ok(if operator == 0 {
+        matched_any
+    } else {
+        !players.is_empty()
+    })
 }
 
 fn eval_scalar_value(
@@ -2203,7 +2262,9 @@ fn eval_scalar_value(
 ) -> Result<ScalarValue, AppError> {
     match eval_value(session, eval_ctx, node_id)? {
         EvalValue::Int(value) => Ok(ScalarValue::Int(value)),
-        EvalValue::Ints(values) => Ok(ScalarValue::Int(values.first().copied().unwrap_or_default())),
+        EvalValue::Ints(values) => Ok(ScalarValue::Int(
+            values.first().copied().unwrap_or_default(),
+        )),
         EvalValue::Bool(value) => Ok(ScalarValue::Bool(value)),
         EvalValue::Choice(value) => Ok(ScalarValue::Int(value)),
         EvalValue::Table => Ok(ScalarValue::Int(0)),
@@ -2263,7 +2324,11 @@ fn resolve_card_set_reference(
 
     if raw.contains('|') {
         let mut cards = Vec::new();
-        for card_id in raw.split('|').map(str::trim).filter(|value| !value.is_empty()) {
+        for card_id in raw
+            .split('|')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             let card = session
                 .deck
                 .iter()
@@ -2321,10 +2386,7 @@ fn execute_method_call(
         .get(class_name)
         .and_then(|class| class.methods.get(method_name))
         .ok_or_else(|| AppError::InvalidInput(format!("方法 {class_name}.{method_name} 不存在")))?;
-    let method_flow = compile_flow(
-        &format!("method:{class_name}.{method_name}"),
-        &method.flow,
-    )?;
+    let method_flow = compile_flow(&format!("method:{class_name}.{method_name}"), &method.flow)?;
 
     let parameter_values = content
         .get("parameter")
@@ -2374,11 +2436,10 @@ fn execute_method_flow(
             return Ok(EvalValue::None);
         }
 
-        let node = flow
-            .nodes
-            .get(&current_node)
-            .cloned()
-            .ok_or_else(|| AppError::InvalidInput(format!("方法节点 {} 不存在", current_node)))?;
+        let node =
+            flow.nodes.get(&current_node).cloned().ok_or_else(|| {
+                AppError::InvalidInput(format!("方法节点 {} 不存在", current_node))
+            })?;
 
         if !visited.insert(current_node.clone()) && node.component_type == 16 {
             return Err(AppError::InvalidInput("方法流程存在死循环".to_string()));
@@ -2401,9 +2462,12 @@ fn execute_method_flow(
             }
             16 => {
                 let branch = eval_condition(session, &eval_ctx, &node)?;
-                current_node =
-                    next_target(&node.id, flow, if branch { "next_true" } else { "next_false" })?
-                        .unwrap_or_default();
+                current_node = next_target(
+                    &node.id,
+                    flow,
+                    if branch { "next_true" } else { "next_false" },
+                )?
+                .unwrap_or_default();
             }
             26 => {
                 let content = node_content(&node)?;
@@ -2433,9 +2497,7 @@ fn resolve_class_name_by_object_ref(object_ref: &str) -> Result<&'static str, Ap
     if object_ref.starts_with("card_") {
         return Ok("card");
     }
-    Err(AppError::InvalidInput(format!(
-        "无法识别对象 {object_ref}"
-    )))
+    Err(AppError::InvalidInput(format!("无法识别对象 {object_ref}")))
 }
 
 fn has_duplicate_card_ids(cards: &[GameCard]) -> bool {

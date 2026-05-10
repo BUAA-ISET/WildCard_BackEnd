@@ -39,6 +39,8 @@ pub struct UserDto {
     pub username: String,
     pub email: String,
     pub avatar: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 impl UserDto {
@@ -48,7 +50,14 @@ impl UserDto {
             username: user.name,
             email: user.email,
             avatar: String::new(),
+            token: None,
         }
+    }
+
+    fn from_user_with_token(user: User, token: String) -> Self {
+        let mut dto = Self::from_user(user);
+        dto.token = Some(token);
+        dto
     }
 }
 
@@ -301,7 +310,9 @@ pub async fn register(
 
     Ok((
         headers,
-        Json(ApiResponse::success(UserDto::from_user(created))),
+        Json(ApiResponse::success(UserDto::from_user_with_token(
+            created, token,
+        ))),
     ))
 }
 
@@ -329,7 +340,9 @@ pub async fn login(
 
         Ok((
             headers,
-            Json(ApiResponse::success(UserDto::from_user(user))),
+            Json(ApiResponse::success(UserDto::from_user_with_token(
+                user, token,
+            ))),
         ))
     } else {
         Err(AppError::InvalidInput("邮箱或密码错误".to_string()))
