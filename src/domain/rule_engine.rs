@@ -96,6 +96,14 @@ pub struct FlowNode {
     pub count: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<FlowNodePosition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowNodePosition {
+    pub x: f64,
+    pub y: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1192,16 +1200,12 @@ fn eval_value(
         return Ok(EvalValue::None);
     }
 
-    if let Some(value) = parse_inline_value(node_id) {
-        return Ok(value);
-    }
-
     if let Some(value) = resolve_keyword_value(session, eval_ctx, node_id)? {
         return Ok(value);
     }
 
     let Some(node) = eval_ctx.flow.nodes.get(node_id) else {
-        return Ok(EvalValue::None);
+        return Ok(parse_inline_value(node_id).unwrap_or(EvalValue::None));
     };
     let content = node_content(node)?;
 
@@ -2640,4 +2644,67 @@ fn primary_card_value(card: &GameCard) -> i64 {
 
 fn shuffle_deck(session: &mut GameSession) {
     session.deck.reverse();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn load_tiny_demo_rule() -> RuntimeRule {
+        let content = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test2.json"),
+        )
+        .expect("test2.json should exist");
+        let design: ExportedRuleDesign =
+            serde_json::from_str(&content).expect("test2.json should be valid rule json");
+
+        RuleEngine::parse(
+            "Tiny Demo".to_string(),
+            2,
+            "engine execution regression".to_string(),
+            design,
+        )
+        .expect("tiny demo should compile")
+    }
+
+    #[test]
+    fn tiny_demo_rule_runs_from_start_to_settlement() {
+        let runtime_rule = load_tiny_demo_rule();
+        let mut session = RuleEngine::start_session(
+            "room-test".to_string(),
+            &runtime_rule,
+            vec!["player-a".to_string(), "player-b".to_string()],
+        )
+        .expect("session should start");
+
+        let pending = session
+            .pending_action
+            .clone()
+            .expect("rule should wait for player card action");
+        assert_eq!(pending.component_type, 21);
+        assert_eq!(pending.player_id, "player-a");
+
+        let first_card = session
+            .hands
+            .get("player-a")
+            .and_then(|cards| cards.first())
+            .map(|card| card.id.clone())
+            .expect("player-a should have a dealt card");
+
+        RuleEngine::submit_action(
+            &runtime_rule,
+            &mut session,
+            "player-a",
+            PlayerActionInput {
+                cards: vec![first_card],
+                choice: None,
+            },
+        )
+        .expect("valid single-card play should execute");
+
+        assert_eq!(session.status, "finished");
+        assert!(session.pending_action.is_none());
+        assert_eq!(session.settlement_results.get("player-a"), Some(&1));
+        assert_eq!(session.settlement_results.get("player-b"), Some(&0));
+    }
 }

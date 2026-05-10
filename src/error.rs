@@ -26,6 +26,8 @@ pub enum AppError {
     Unauthorized(String),
     #[error("加密错误")]
     CryptoError(#[from] password_hash::Error),
+    #[error("JSON 解析错误：{0}")]
+    JsonError(#[from] serde_json::Error),
 }
 
 impl IntoResponse for AppError {
@@ -39,6 +41,7 @@ impl IntoResponse for AppError {
                 (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
             }
             AppError::CryptoError(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+            AppError::JsonError(error) => (StatusCode::BAD_REQUEST, error.to_string()),
         };
         let body = Json(ErrorResponse {
             success: false,

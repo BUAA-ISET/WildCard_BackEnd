@@ -5,7 +5,9 @@ use axum::{
     extract::{Path, State},
 };
 use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, Row};
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use crate::{
     domain::rule_engine::{ExportedRuleDesign, RuleEngine, RuntimeRule},
@@ -92,6 +94,11 @@ pub struct RuleRepository {
     pub published: HashMap<String, PublishedRule>,
 }
 
+#[derive(Clone)]
+pub struct RulePersistence {
+    pub pool: PgPool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SaveDraftResponse {
     pub id: String,
@@ -117,9 +124,48 @@ pub struct RuleOption {
     pub description: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RuleDraftSummary {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "playerCount")]
+    pub player_count: u8,
+    pub description: String,
+    pub status: RuleStatus,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_rule_id: Option<String>,
+}
+
+pub async fn list_drafts(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(store): State<RuleStore>,
+) -> Result<Json<ApiResponse<Vec<RuleDraftSummary>>>, AppError> {
+    let guard = store.read().await;
+    let mut drafts = guard
+        .drafts
+        .values()
+        .filter(|draft| draft.owner_id == user_id.to_string())
+        .map(|draft| RuleDraftSummary {
+            id: draft.id.clone(),
+            name: draft.name.clone(),
+            player_count: draft.player_count,
+            description: draft.description.clone(),
+            status: draft.status.clone(),
+            updated_at: draft.updated_at,
+            published_rule_id: draft.published_rule_id.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    drafts.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Ok(Json(ApiResponse::success(drafts)))
+}
+
 pub async fn save_draft(
     TokenClaims { user_id, .. }: TokenClaims,
     State(store): State<RuleStore>,
+    State(persistence): State<RulePersistence>,
     Json(payload): Json<SaveRuleDraftRequest>,
 ) -> Result<Json<ApiResponse<SaveDraftResponse>>, AppError> {
     // 保存草稿时就解析一次，尽早把前端 JSON 中的结构错误反馈给用户。
@@ -149,6 +195,7 @@ pub async fn save_draft(
         updated_at: draft.updated_at,
     };
 
+    persistence.save_draft(&draft).await?;
     store.write().await.drafts.insert(draft.id.clone(), draft);
     Ok(Json(ApiResponse::success(response)))
 }
@@ -156,6 +203,7 @@ pub async fn save_draft(
 pub async fn update_draft(
     TokenClaims { user_id, .. }: TokenClaims,
     State(store): State<RuleStore>,
+    State(persistence): State<RulePersistence>,
     Path(draft_id): Path<String>,
     Json(payload): Json<SaveRuleDraftRequest>,
 ) -> Result<Json<ApiResponse<SaveDraftResponse>>, AppError> {
@@ -178,6 +226,7 @@ pub async fn update_draft(
     draft.design = payload.design;
     draft.status = RuleStatus::Draft;
     draft.updated_at = now;
+    persistence.save_draft(draft).await?;
 
     Ok(Json(ApiResponse::success(SaveDraftResponse {
         id: draft.id.clone(),
@@ -198,9 +247,43 @@ pub async fn get_draft(
     Ok(Json(ApiResponse::success(draft.clone())))
 }
 
+pub async fn delete_draft(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(store): State<RuleStore>,
+    State(persistence): State<RulePersistence>,
+    Path(draft_id): Path<String>,
+) -> Result<Json<ApiResponse<RuleDraftSummary>>, AppError> {
+    let mut guard = store.write().await;
+    let draft = guard.drafts.get(&draft_id).ok_or(AppError::NotFound)?;
+    ensure_owner(&draft.owner_id, &user_id.to_string())?;
+
+    let summary = RuleDraftSummary {
+        id: draft.id.clone(),
+        name: draft.name.clone(),
+        player_count: draft.player_count,
+        description: draft.description.clone(),
+        status: draft.status.clone(),
+        updated_at: draft.updated_at,
+        published_rule_id: draft.published_rule_id.clone(),
+    };
+    let published_rule_id = draft.published_rule_id.clone();
+
+    persistence
+        .delete_draft(&draft_id, &user_id.to_string())
+        .await?;
+    guard.drafts.remove(&draft_id);
+
+    if let Some(rule_id) = published_rule_id {
+        guard.published.remove(&rule_id);
+    }
+
+    Ok(Json(ApiResponse::success(summary)))
+}
+
 pub async fn publish_draft(
     TokenClaims { user_id, .. }: TokenClaims,
     State(store): State<RuleStore>,
+    State(persistence): State<RulePersistence>,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<PublishRuleResponse>>, AppError> {
     let mut guard = store.write().await;
@@ -239,6 +322,10 @@ pub async fn publish_draft(
         }
     };
 
+    persistence.save_draft(draft).await?;
+    persistence
+        .save_published_rule(&published_rule, &draft_id)
+        .await?;
     guard.published.insert(rule_id.clone(), published_rule);
 
     Ok(Json(ApiResponse::success(PublishRuleResponse {
@@ -272,7 +359,269 @@ pub async fn rule_options(
     Ok(Json(ApiResponse::success(options)))
 }
 
-pub fn build_rule_store() -> Arc<RwLock<RuleRepository>> {
+impl RulePersistence {
+    pub async fn ensure_schema(&self) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS rule_drafts (
+                id VARCHAR(128) PRIMARY KEY,
+                owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name VARCHAR(255) NOT NULL,
+                player_count SMALLINT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                status VARCHAR(32) NOT NULL DEFAULT 'draft',
+                design JSONB NOT NULL,
+                published_rule_id VARCHAR(128),
+                created_at BIGINT NOT NULL,
+                updated_at BIGINT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_rule_drafts_owner_updated
+                ON rule_drafts(owner_id, updated_at DESC)
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS rule_published (
+                id VARCHAR(128) PRIMARY KEY,
+                draft_id VARCHAR(128) REFERENCES rule_drafts(id) ON DELETE SET NULL,
+                owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name VARCHAR(255) NOT NULL,
+                player_count SMALLINT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                version INTEGER NOT NULL DEFAULT 1,
+                design JSONB NOT NULL,
+                created_at BIGINT NOT NULL,
+                updated_at BIGINT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_rule_published_owner_updated
+                ON rule_published(owner_id, updated_at DESC)
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        Ok(())
+    }
+
+    pub async fn load_into(&self, repository: &mut RuleRepository) -> Result<(), AppError> {
+        let draft_rows = sqlx::query(
+            r#"
+            SELECT id, owner_id, name, player_count, description, status, design,
+                   published_rule_id, created_at, updated_at
+            FROM rule_drafts
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        for row in draft_rows {
+            let design: serde_json::Value = row.get("design");
+            let design: ExportedRuleDesign =
+                serde_json::from_value(design).map_err(AppError::JsonError)?;
+            let status = match row.get::<String, _>("status").as_str() {
+                "published" => RuleStatus::Published,
+                _ => RuleStatus::Draft,
+            };
+
+            let draft = RuleDraft {
+                id: row.get("id"),
+                owner_id: row.get::<Uuid, _>("owner_id").to_string(),
+                name: row.get("name"),
+                player_count: row.get::<i16, _>("player_count") as u8,
+                description: row.get("description"),
+                status,
+                design,
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+                published_rule_id: row.get("published_rule_id"),
+            };
+            repository.drafts.insert(draft.id.clone(), draft);
+        }
+
+        let published_rows = sqlx::query(
+            r#"
+            SELECT id, owner_id, name, player_count, description, version, design,
+                   created_at, updated_at
+            FROM rule_published
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        for row in published_rows {
+            let design: serde_json::Value = row.get("design");
+            let design: ExportedRuleDesign =
+                serde_json::from_value(design).map_err(AppError::JsonError)?;
+            let name: String = row.get("name");
+            let player_count = row.get::<i16, _>("player_count") as u8;
+            let description: String = row.get("description");
+            let runtime = RuleEngine::parse(
+                name.clone(),
+                player_count,
+                description.clone(),
+                design.clone(),
+            )?;
+            let published_rule = PublishedRule {
+                id: row.get("id"),
+                owner_id: row.get::<Uuid, _>("owner_id").to_string(),
+                name,
+                player_count,
+                description,
+                version: row.get::<i32, _>("version") as u32,
+                design,
+                runtime,
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            };
+            repository
+                .published
+                .insert(published_rule.id.clone(), published_rule);
+        }
+
+        Ok(())
+    }
+
+    pub async fn save_draft(&self, draft: &RuleDraft) -> Result<(), AppError> {
+        let design = serde_json::to_value(&draft.design).map_err(AppError::JsonError)?;
+        let owner_id = Uuid::parse_str(&draft.owner_id)
+            .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效: {e}")))?;
+        let status = match draft.status {
+            RuleStatus::Draft => "draft",
+            RuleStatus::Published => "published",
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO rule_drafts (
+                id, owner_id, name, player_count, description, status, design,
+                published_rule_id, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                player_count = EXCLUDED.player_count,
+                description = EXCLUDED.description,
+                status = EXCLUDED.status,
+                design = EXCLUDED.design,
+                published_rule_id = EXCLUDED.published_rule_id,
+                updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(&draft.id)
+        .bind(owner_id)
+        .bind(&draft.name)
+        .bind(draft.player_count as i16)
+        .bind(&draft.description)
+        .bind(status)
+        .bind(design)
+        .bind(&draft.published_rule_id)
+        .bind(draft.created_at)
+        .bind(draft.updated_at)
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        Ok(())
+    }
+
+    pub async fn save_published_rule(
+        &self,
+        rule: &PublishedRule,
+        draft_id: &str,
+    ) -> Result<(), AppError> {
+        let design = serde_json::to_value(&rule.design).map_err(AppError::JsonError)?;
+        let owner_id = Uuid::parse_str(&rule.owner_id)
+            .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效: {e}")))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO rule_published (
+                id, draft_id, owner_id, name, player_count, description, version,
+                design, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                player_count = EXCLUDED.player_count,
+                description = EXCLUDED.description,
+                version = rule_published.version + 1,
+                design = EXCLUDED.design,
+                updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(&rule.id)
+        .bind(draft_id)
+        .bind(owner_id)
+        .bind(&rule.name)
+        .bind(rule.player_count as i16)
+        .bind(&rule.description)
+        .bind(rule.version as i32)
+        .bind(design)
+        .bind(rule.created_at)
+        .bind(rule.updated_at)
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        Ok(())
+    }
+
+    pub async fn delete_draft(&self, draft_id: &str, owner_id: &str) -> Result<(), AppError> {
+        let owner_id = Uuid::parse_str(owner_id)
+            .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效: {e}")))?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM rule_published
+            WHERE draft_id = $1 AND owner_id = $2
+            "#,
+        )
+        .bind(draft_id)
+        .bind(owner_id)
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM rule_drafts
+            WHERE id = $1 AND owner_id = $2
+            "#,
+        )
+        .bind(draft_id)
+        .bind(owner_id)
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        Ok(())
+    }
+}
+
+pub async fn build_rule_store(pool: &PgPool) -> Result<Arc<RwLock<RuleRepository>>, AppError> {
     let mut repository = RuleRepository::default();
     for default_rule in build_builtin_rules() {
         repository
@@ -280,7 +629,14 @@ pub fn build_rule_store() -> Arc<RwLock<RuleRepository>> {
             .insert(default_rule.id.clone(), default_rule);
     }
 
-    Arc::new(RwLock::new(repository))
+    RulePersistence { pool: pool.clone() }
+        .ensure_schema()
+        .await?;
+    RulePersistence { pool: pool.clone() }
+        .load_into(&mut repository)
+        .await?;
+
+    Ok(Arc::new(RwLock::new(repository)))
 }
 
 fn ensure_owner(owner_id: &str, user_id: &str) -> Result<(), AppError> {

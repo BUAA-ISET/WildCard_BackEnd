@@ -78,7 +78,9 @@ async fn main() {
         verification_codes: Arc::new(RwLock::new(Default::default())),
 
         games: Arc::new(RwLock::new(Default::default())),
-        rules: rule::build_rule_store(),
+        rules: rule::build_rule_store(&pool)
+            .await
+            .expect("Failed to initialize rule store"),
         rooms: room::build_room_store(),
     };
 
@@ -87,7 +89,13 @@ async fn main() {
         .allow_origin(AllowOrigin::predicate(move |origin, _request_parts| {
             is_allowed_cors_origin(origin, &allowed_origins)
         }))
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
             axum::http::header::AUTHORIZATION,
@@ -113,10 +121,15 @@ async fn main() {
             "/api/user/password",
             post(user::update_password).put(user::update_password),
         )
-        .route("/api/rules/drafts", post(rule::save_draft))
+        .route(
+            "/api/rules/drafts",
+            get(rule::list_drafts).post(rule::save_draft),
+        )
         .route(
             "/api/rules/drafts/{draft_id}",
-            get(rule::get_draft).put(rule::update_draft),
+            get(rule::get_draft)
+                .put(rule::update_draft)
+                .delete(rule::delete_draft),
         )
         .route(
             "/api/rules/drafts/{draft_id}/publish",

@@ -6,7 +6,7 @@ use tokio::sync::RwLock;
 use crate::domain::game::GameSession;
 use crate::infrastructure::user::UserRepository;
 use crate::interface::room::RoomRepository;
-use crate::interface::rule::RuleRepository;
+use crate::interface::rule::{RulePersistence, RuleRepository};
 
 pub type RuleStore = Arc<RwLock<RuleRepository>>;
 pub type RoomStore = Arc<RwLock<RoomRepository>>;
@@ -36,6 +36,14 @@ impl FromRef<GlobalState> for Arc<RwLock<HashMap<String, VerificationCodeRecord>
 impl FromRef<GlobalState> for RuleStore {
     fn from_ref(input: &GlobalState) -> Self {
         input.rules.clone()
+    }
+}
+
+impl FromRef<GlobalState> for RulePersistence {
+    fn from_ref(input: &GlobalState) -> Self {
+        RulePersistence {
+            pool: input.user.pool.clone(),
+        }
     }
 }
 
