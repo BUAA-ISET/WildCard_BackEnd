@@ -1,0 +1,400 @@
+{
+  "classes": {
+    "player": {
+      "default_properties": {
+        "手牌数": {
+          "type": "int",
+          "default": 0
+        }
+      },
+      "user_properties": {},
+      "methods": {}
+    },
+    "card": {
+      "default_properties": {
+        "点数": {
+          "type": "enum",
+          "default": 1,
+          "config": [
+            {
+              "id": "enum-1778230361956-nph4p",
+              "display": "A",
+              "value": 1
+            },
+            {
+              "id": "enum-1778230361956-novs5",
+              "display": "2",
+              "value": 2
+            },
+            {
+              "id": "enum-1778230361956-ghym3",
+              "display": "3",
+              "value": 3
+            }
+          ]
+        },
+        "花色": {
+          "type": "enum",
+          "default": 0,
+          "config": [
+            {
+              "id": "enum-1778230361956-85r3e",
+              "display": "黑桃",
+              "value": 0
+            },
+            {
+              "id": "enum-1778230361956-pj354",
+              "display": "红桃",
+              "value": 1
+            },
+            {
+              "id": "enum-1778230361956-wxt21",
+              "display": "梅花",
+              "value": 2
+            },
+            {
+              "id": "enum-1778230361956-b4i9n",
+              "display": "方块",
+              "value": 3
+            }
+          ]
+        }
+      },
+      "user_properties": {},
+      "methods": {}
+    },
+    "table": {
+      "default_properties": {
+        "卡牌池": {
+          "type": "int",
+          "default": 0
+        },
+        "玩家池": {
+          "type": "int",
+          "default": 0
+        },
+        "本轮应出牌者": {
+          "type": "int",
+          "default": 0
+        }
+      },
+      "user_properties": {
+        "index": {
+          "type": "int",
+          "default": 0
+        },
+        "cur_max": {
+          "type": "int",
+          "default": -1
+        },
+        "player_index": {
+          "type": "int",
+          "default": 0
+        }
+      },
+      "methods": {}
+    }
+  },
+  "cardsets": {
+    "1": {
+      "name": "单张",
+      "properties": {
+        "权重": {
+          "type": "int",
+          "default": 0
+        }
+      },
+      "build_flow": {
+        "1": {
+          "type": 27,
+          "content": {}
+        }
+      },
+      "compare_flow": {
+        "1": {
+          "type": 29,
+          "content": {
+            "cardsetA": "",
+            "cardsetB": ""
+          }
+        }
+      },
+      "successors": []
+    }
+  },
+  "cardset_comparisons": {
+    "1": {
+      "cardsetA": "单张",
+      "cardsetB": "",
+      "compare_flow": {
+        "1": {
+          "type": 29,
+          "content": {
+            "cardsetA": "单张",
+            "cardsetB": ""
+          }
+        },
+        "2": {
+          "type": 6,
+          "content": {
+            "operator": 0,
+            "ident": "",
+            "property": ""
+          }
+        },
+        "3": {
+          "type": 5,
+          "content": {
+            "selection": "",
+            "index": ""
+          }
+        },
+        "4": {
+          "type": 30,
+          "content": {
+            "result": 1
+          }
+        }
+      }
+    }
+  },
+  "match_flow": {
+    "1": {
+      "type": 17,
+      "content": {
+        "next": "5"
+      }
+    },
+    "2": {
+      "type": 6,
+      "content": {
+        "operator": 0,
+        "ident": "table_0",
+        "property": "本轮应出牌者"
+      }
+    },
+    "3": {
+      "type": 6,
+      "content": {
+        "operator": 0,
+        "ident": "table_0",
+        "property": "index"
+      }
+    },
+    "4": {
+      "type": 5,
+      "content": {
+        "selection": "6",
+        "index": "3"
+      }
+    },
+    "5": {
+      "type": 4,
+      "content": {
+        "component": "2",
+        "rvalue": "4",
+        "next": "6"
+      }
+    },
+    "6": {
+      "type": 20,
+      "content": {
+        "prop_pair": [
+          {
+            "prop_name": "点数",
+            "lower_bound": 1,
+            "upper_bound": 3
+          }
+        ]
+      },
+      "count": 1,
+      "next": "9"
+    },
+    "7": {
+      "type": 6,
+      "content": {
+        "operator": 0,
+        "ident": "",
+        "property": ""
+      }
+    },
+    "8": {
+      "type": 6,
+      "content": {
+        "operator": 0,
+        "ident": "table_0",
+        "property": "index"
+      }
+    },
+    "9": {
+      "type": 16,
+      "content": {
+        "condition": "",
+        "next_true": "15",
+        "next_false": "10"
+      }
+    },
+    "10": {
+      "type": 4,
+      "content": {
+        "component": "8",
+        "rvalue": "11",
+        "next": "5"
+      }
+    },
+    "11": {
+      "type": 10,
+      "content": {
+        "operator": 0,
+        "lval": "8",
+        "rval": "14"
+      }
+    },
+    "12": {
+      "type": 6,
+      "content": {
+        "operator": 0,
+        "ident": "table_0",
+        "property": "本轮应出牌者"
+      }
+    },
+    "13": {
+      "type": 5,
+      "content": {
+        "selection": "16",
+        "index": "16"
+      }
+    },
+    "14": {
+      "type": 8,
+      "content": {
+        "value": 1
+      }
+    },
+    "15": {
+      "type": 4,
+      "content": {
+        "component": "12",
+        "rvalue": "13",
+        "next": "17"
+      }
+    },
+    "16": {
+      "type": 6,
+      "content": {
+        "operator": 0,
+        "ident": "table_0",
+        "property": "player_index"
+      }
+    },
+    "17": {
+      "type": 21,
+      "content": {
+        "timer": 30,
+        "next": "18"
+      }
+    },
+    "18": {
+      "type": 16,
+      "content": {
+        "condition": "",
+        "next_true": "21",
+        "next_false": "24"
+      }
+    },
+    "19": {
+      "type": 6,
+      "content": {
+        "operator": 0,
+        "ident": "table_0",
+        "property": "cur_max"
+      }
+    },
+    "20": {
+      "type": 6,
+      "content": {
+        "operator": 1,
+        "ident": "17",
+        "property": "content"
+      }
+    },
+    "21": {
+      "type": 4,
+      "content": {
+        "component": "19",
+        "rvalue": "20",
+        "next": "24"
+      }
+    },
+    "22": {
+      "type": 6,
+      "content": {
+        "operator": 0,
+        "ident": "table_0",
+        "property": "player_index"
+      }
+    },
+    "23": {
+      "type": 8,
+      "content": {
+        "value": 1
+      }
+    },
+    "24": {
+      "type": 4,
+      "content": {
+        "component": "22",
+        "rvalue": "25",
+        "next": "26"
+      }
+    },
+    "25": {
+      "type": 10,
+      "content": {
+        "operator": 0,
+        "lval": "22",
+        "rval": "23"
+      }
+    },
+    "26": {
+      "type": 16,
+      "content": {
+        "condition": "",
+        "next_true": "27",
+        "next_false": "15"
+      }
+    },
+    "27": {
+      "type": 18,
+      "content": null
+    }
+  },
+  "end_flow": {
+    "1": {
+      "type": 23,
+      "content": {
+        "next": "2"
+      }
+    },
+    "2": {
+      "type": 16,
+      "content": {
+        "condition": "",
+        "next_true": "4",
+        "next_false": "3"
+      }
+    },
+    "3": {
+      "type": 24,
+      "content": {
+        "result": 0
+      }
+    },
+    "4": {
+      "type": 24,
+      "content": {
+        "result": 1
+      }
+    }
+  }
+}

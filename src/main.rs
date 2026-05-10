@@ -5,7 +5,7 @@ mod interface;
 mod state;
 
 use crate::infrastructure::user::UserRepository;
-use crate::interface::{game, room, rule, user};
+use crate::interface::{room, rule, user};
 use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
@@ -15,7 +15,7 @@ use axum::{
 };
 use dotenv::dotenv;
 use sqlx::PgPool;
-use std::{env, sync::Arc};
+use std::{collections::HashSet, env, sync::Arc};
 use tokio::sync::RwLock;
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
@@ -72,26 +72,33 @@ async fn main() {
     // Connect to postgres database.
     let pool = PgPool::connect_lazy(&database_url).expect("Failed to connect to the database");
 
-    let (rooms, room_rules) = room::build_default_room_state();
-
     let state = GlobalState {
         jwt_secret: JwtSecret(secret_key.into_bytes()),
         user: Arc::new(UserRepository { pool: pool.clone() }),
         verification_codes: Arc::new(RwLock::new(Default::default())),
 
         games: Arc::new(RwLock::new(Default::default())),
-        rules: rule::build_rule_store(),
+        rules: rule::build_rule_store(&pool)
+            .await
+            .expect("Failed to initialize rule store"),
         rooms: room::build_room_store(),
     };
 
+    let allowed_origins = allowed_cors_origins();
     let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::list([
-            HeaderValue::from_static("http://localhost:5173"),
-            HeaderValue::from_static("http://127.0.0.1:5173"),
-        ]))
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
+        .allow_origin(AllowOrigin::predicate(move |origin, _request_parts| {
+            is_allowed_cors_origin(origin, &allowed_origins)
+        }))
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
             HeaderName::from_static("x-player-id"),
             HeaderName::from_static("x-player-name"),
             HeaderName::from_static("x-player-avatar"),
@@ -114,10 +121,15 @@ async fn main() {
             "/api/user/password",
             post(user::update_password).put(user::update_password),
         )
-        .route("/api/rules/drafts", post(rule::save_draft))
+        .route(
+            "/api/rules/drafts",
+            get(rule::list_drafts).post(rule::save_draft),
+        )
         .route(
             "/api/rules/drafts/{draft_id}",
-            get(rule::get_draft).put(rule::update_draft),
+            get(rule::get_draft)
+                .put(rule::update_draft)
+                .delete(rule::delete_draft),
         )
         .route(
             "/api/rules/drafts/{draft_id}/publish",
@@ -132,15 +144,19 @@ async fn main() {
         .route("/api/room/current/start", post(room::start_game))
         .route("/api/room/leave", post(room::leave_room))
         .route("/api/room/rule/get", get(room::get_room_rule))
-        .route("/api/games/current", get(game::get_current_game))
-        .route("/api/games/{sessionId}", get(game::get_game_by_session))
+        .route("/api/games/current", get(room::current_game))
+        .route("/api/games/{sessionId}", get(room::get_game))
         .route(
             "/api/games/{sessionId}/actions/{actionId}/play-cards",
-            post(game::play_cards),
+            post(room::play_cards),
         )
         .route(
             "/api/games/{sessionId}/actions/{actionId}/skip",
-            post(game::skip_turn),
+            post(room::skip_action),
+        )
+        .route(
+            "/api/games/{sessionId}/actions/{actionId}/choose",
+            post(room::choose_action),
         )
         .layer(cors)
         .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans
@@ -150,4 +166,33 @@ async fn main() {
         .await
         .unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+fn allowed_cors_origins() -> HashSet<String> {
+    let mut origins = HashSet::from([
+        "http://localhost:5173".to_string(),
+        "http://127.0.0.1:5173".to_string(),
+        "http://localhost:8084".to_string(),
+        "http://127.0.0.1:8084".to_string(),
+    ]);
+
+    if let Ok(configured_origins) = env::var("CORS_ALLOWED_ORIGINS") {
+        origins.extend(
+            configured_origins
+                .split(',')
+                .map(str::trim)
+                .filter(|origin| !origin.is_empty())
+                .map(ToOwned::to_owned),
+        );
+    }
+
+    origins
+}
+
+fn is_allowed_cors_origin(origin: &HeaderValue, allowed_origins: &HashSet<String>) -> bool {
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+
+    allowed_origins.contains(origin) || origin.starts_with("http://") && origin.ends_with(":8084")
 }
