@@ -556,10 +556,10 @@ async fn submit_game_action(
         session.clone()
     };
 
-    if session_snapshot.status == "finished" {
-        if let Some(room) = room_guard.rooms.get_mut(&room_code) {
-            reset_room_after_game(room);
-        }
+    if session_snapshot.status == "finished"
+        && let Some(room) = room_guard.rooms.get_mut(&room_code)
+    {
+        reset_room_after_game(room);
     }
 
     let room = room_guard.rooms.get(&room_code);
@@ -629,10 +629,10 @@ fn remove_player_from_room(guard: &mut RoomRepository, code: &str, player_id: &s
             session_id_to_remove = room.game_session_id.clone();
             should_remove_room = true;
         } else {
-            if room.host_id == player_id {
-                if let Some(next_host_id) = next_host_id(&room.players) {
-                    room.host_id = next_host_id.clone();
-                }
+            if room.host_id == player_id
+                && let Some(next_host_id) = next_host_id(&room.players)
+            {
+                room.host_id = next_host_id.clone();
             }
 
             if matches!(room.status, RoomStatus::Playing) {
@@ -652,13 +652,12 @@ fn remove_player_from_room(guard: &mut RoomRepository, code: &str, player_id: &s
     if should_remove_room {
         guard.rooms.remove(code);
     }
-    if should_remove_session {
-        if let Some(session_id) = session_id_to_remove {
-            guard.sessions.remove(&session_id);
-        }
+    if should_remove_session && let Some(session_id) = session_id_to_remove {
+        guard.sessions.remove(&session_id);
     }
 }
 
+#[allow(dead_code)]
 fn release_room_after_game(guard: &mut RoomRepository, room_code: &str) {
     let session_id = guard
         .rooms
