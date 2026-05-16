@@ -158,7 +158,7 @@ pub async fn list_drafts(
         })
         .collect::<Vec<_>>();
 
-    drafts.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    drafts.sort_by_key(|draft| std::cmp::Reverse(draft.updated_at));
     Ok(Json(ApiResponse::success(drafts)))
 }
 
@@ -651,6 +651,7 @@ fn now_millis() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000
 }
 
+#[allow(dead_code)]
 fn build_builtin_test_rule() -> Option<PublishedRule> {
     let rule_path = concat!(env!("CARGO_MANIFEST_DIR"), "\\test.json");
     let content = std::fs::read_to_string(rule_path).ok()?;

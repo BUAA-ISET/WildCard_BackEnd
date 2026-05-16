@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+pub mod domain;
+pub mod error;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestUser {
     pub id: u64,

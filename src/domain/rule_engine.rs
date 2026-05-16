@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::collapsible_match)]
+
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 

@@ -91,6 +91,7 @@ impl<T> ApiResponse<T> {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn failure(message: String) -> Self {
         Self {
             success: false,
