@@ -33,6 +33,19 @@ fn parse_rejects_empty_rule_metadata() {
 }
 
 #[test]
+fn parse_rejects_zero_player_count() {
+    let error = RuleEngine::parse(
+        "Tiny Demo".to_string(),
+        0,
+        "missing players".to_string(),
+        load_tiny_demo_rule(),
+    )
+    .expect_err("rules must require at least one player");
+
+    assert!(error.to_string().contains("规则玩家人数必须大于 0"));
+}
+
+#[test]
 fn parse_rejects_rules_without_card_class() {
     let mut design = load_tiny_demo_rule();
     design.classes.remove("card");
@@ -45,6 +58,75 @@ fn parse_rejects_rules_without_card_class() {
     .expect_err("rules need a card class to compile");
 
     assert!(error.to_string().contains("规则缺少固有类 classes.card"));
+}
+
+#[test]
+fn parse_rejects_unsupported_component_types() {
+    let mut design = load_tiny_demo_rule();
+    design
+        .match_flow
+        .get_mut("1")
+        .expect("fixture should have a match_flow start node")
+        .component_type = 999;
+
+    let error = RuleEngine::parse(
+        "Unsupported Component".to_string(),
+        2,
+        "bad component".to_string(),
+        design,
+    )
+    .expect_err("unknown component types must be rejected during parse");
+
+    assert!(error.to_string().contains("后端不支持的组件类型 999"));
+}
+
+#[test]
+fn parse_rejects_missing_transition_targets() {
+    let mut design = load_tiny_demo_rule();
+    design
+        .match_flow
+        .get_mut("1")
+        .expect("fixture should have a match_flow start node")
+        .next = Some("missing-node".to_string());
+
+    let error = RuleEngine::parse(
+        "Missing Target".to_string(),
+        2,
+        "bad transition".to_string(),
+        design,
+    )
+    .expect_err("flow transitions must point to existing nodes");
+
+    assert!(
+        error
+            .to_string()
+            .contains("match_flow 节点 1 的 next 指向不存在的节点 missing-node")
+    );
+}
+
+#[test]
+fn parse_rejects_invalid_property_types() {
+    let mut design = load_tiny_demo_rule();
+    let card_class = design
+        .classes
+        .get_mut("card")
+        .expect("fixture should have a card class");
+    let rank_property = card_class
+        .default_properties
+        .values_mut()
+        .next()
+        .expect("fixture should have at least one card property");
+    rank_property.data_type = "string".to_string();
+
+    let error = RuleEngine::parse(
+        "Invalid Property".to_string(),
+        2,
+        "bad property".to_string(),
+        design,
+    )
+    .expect_err("only int and enum properties should compile");
+
+    assert!(error.to_string().contains("的类型必须是 int 或 enum"));
 }
 
 #[test]
