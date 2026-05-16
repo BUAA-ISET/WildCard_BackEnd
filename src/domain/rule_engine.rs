@@ -1411,24 +1411,22 @@ fn resolve_component_property_access(
     if let Some(node) = eval_ctx.flow.nodes.get(ident) {
         match node.component_type {
             17 => {
-                if property == "牌桌" || property == "鐗屾" {
+                if property == "牌桌" {
                     return Ok(EvalValue::Table);
                 }
             }
             21 => {
-                if property == "用户打出的牌组" || property == "鐢ㄦ埛鎵撳嚭鐨勭墝缁?"
-                {
+                if property == "用户打出的牌组" {
                     return Ok(EvalValue::Cards(session.last_action_cards.clone()));
                 }
             }
             22 => {
-                if property == "用户做出的选择" || property == "鐢ㄦ埛鍋氬嚭鐨勯€夋嫨"
-                {
+                if property == "用户做出的选择" {
                     return Ok(EvalValue::Choice(table_i64(session, "用户做出的选择")));
                 }
             }
             23 => {
-                if property == "玩家" || property == "鐜╁" {
+                if property == "玩家" {
                     let player_id = current_player_id(session, Some(eval_ctx))?;
                     let player = session
                         .players
@@ -1440,8 +1438,7 @@ fn resolve_component_property_access(
                 }
             }
             25 => {
-                if property == "调用该方法的对象" || property == "璋冪敤璇ユ柟娉曠殑瀵硅薄"
-                {
+                if property == "调用该方法的对象" {
                     if let Some(method_ctx) = eval_ctx.method {
                         if let Some(value) =
                             resolve_object_reference(session, eval_ctx, &method_ctx.object_ref)?
@@ -1457,7 +1454,7 @@ fn resolve_component_property_access(
                 }
             }
             27 => {
-                if property == "传入牌组" || property == "浼犲叆鐗岀粍" {
+                if property == "传入牌组" {
                     return Ok(EvalValue::Cards(
                         eval_ctx.cardset_input.unwrap_or(&[]).to_vec(),
                     ));
@@ -1465,16 +1462,16 @@ fn resolve_component_property_access(
             }
             29 => {
                 if let Some(compare) = eval_ctx.compare {
-                    if property == "牌型A" || property == "鐗屽瀷A" {
+                    if property == "牌型A" {
                         return Ok(EvalValue::Cardset(compare.cardset_a.clone()));
                     }
-                    if property == "牌型B" || property == "鐗屽瀷B" {
+                    if property == "牌型B" {
                         return Ok(EvalValue::Cardset(compare.cardset_b.clone()));
                     }
                     if let Some((prefix, field)) = property.split_once('.') {
-                        let target = if prefix == "牌型A" || prefix == "鐗屽瀷A" {
+                        let target = if prefix == "牌型A" {
                             Some(&compare.cardset_a)
-                        } else if prefix == "牌型B" || prefix == "鐗屽瀷B" {
+                        } else if prefix == "牌型B" {
                             Some(&compare.cardset_b)
                         } else {
                             None
@@ -1546,10 +1543,10 @@ fn access_property_from_value(property: &str, source: EvalValue) -> Result<EvalV
             ))
         }
         EvalValue::Table => {
-            if property == "玩家池" || property == "鐜╁姹?" {
+            if property == "玩家池" {
                 return Ok(EvalValue::Players(Vec::new()));
             }
-            if property == "卡牌池" || property == "鍗＄墝姹?" {
+            if property == "卡牌池" {
                 return Ok(EvalValue::Cards(Vec::new()));
             }
             Ok(EvalValue::Int(0))
@@ -1755,7 +1752,6 @@ fn update_player_hand_count(session: &mut GameSession, player_id: &str) {
         .find(|player| player.id == player_id)
     {
         player.properties.insert("手牌数".to_string(), count);
-        player.properties.insert("鎵嬬墝鏁?".to_string(), count);
     }
 }
 
@@ -1768,11 +1764,11 @@ fn access_table_property(
     _eval_ctx: &RuntimeEvalContext<'_>,
     property: &str,
 ) -> Result<EvalValue, AppError> {
-    if matches!(property, "玩家池" | "鐜╁姹?") {
+    if property == "玩家池" {
         return Ok(EvalValue::Players(session.players.clone()));
     }
 
-    if matches!(property, "卡牌池" | "鍗＄墝姹?") {
+    if property == "卡牌池" {
         return Ok(EvalValue::Cards(session.deck.clone()));
     }
 
