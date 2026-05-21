@@ -148,6 +148,18 @@ fn validate_email(email: &str) -> Result<String, AppError> {
     Ok(normalized)
 }
 
+fn validate_login_account(account: &str) -> Result<String, AppError> {
+    let normalized = account.trim().to_string();
+    if normalized.is_empty() {
+        return Err(AppError::InvalidInput("请输入邮箱或用户名".to_string()));
+    }
+    Ok(normalized)
+}
+
+fn looks_like_email(account: &str) -> bool {
+    account.contains('@')
+}
+
 fn validate_username(username: &str) -> Result<String, AppError> {
     let normalized = username.trim().to_string();
     if normalized.is_empty() {
@@ -323,14 +335,19 @@ pub async fn login(
     State(user_repo): State<Arc<UserRepository>>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<(HeaderMap, Json<ApiResponse<UserDto>>), AppError> {
-    let email = validate_email(&payload.email)?;
+    let account = validate_login_account(&payload.email)?;
     let password = validate_password(&payload.password, "请输入邮箱和密码")?;
-    let user = user_repo.find_by_email(&email).await?;
+
+    let user = if looks_like_email(&account) {
+        user_repo.find_by_email(&account.to_lowercase()).await?
+    } else {
+        user_repo.find_by_name(&account).await?
+    };
 
     if let Some(user) = user {
         let is_valid = UserRepository::check_password(&password, &user.password);
         if !is_valid {
-            return Err(AppError::InvalidInput("邮箱或密码错误".to_string()));
+            return Err(AppError::InvalidInput("账号或密码错误".to_string()));
         }
 
         let token = build_token(user.id.clone(), &jwt_secret)?;
@@ -346,7 +363,7 @@ pub async fn login(
             ))),
         ))
     } else {
-        Err(AppError::InvalidInput("邮箱或密码错误".to_string()))
+        Err(AppError::InvalidInput("账号或密码错误".to_string()))
     }
 }
 
@@ -412,4 +429,33 @@ pub async fn update_password(
     Ok(Json(ApiResponse::success_without_data(Some(
         "密码更新成功".to_string(),
     ))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{looks_like_email, validate_login_account};
+
+    #[test]
+    fn looks_like_email_detects_at_symbol() {
+        assert!(looks_like_email("a@b.com"));
+        assert!(looks_like_email("foo@bar"));
+    }
+
+    #[test]
+    fn looks_like_email_rejects_plain_username() {
+        assert!(!looks_like_email("alice"));
+        assert!(!looks_like_email("user_123"));
+    }
+
+    #[test]
+    fn validate_login_account_rejects_empty() {
+        assert!(validate_login_account("").is_err());
+        assert!(validate_login_account("   ").is_err());
+    }
+
+    #[test]
+    fn validate_login_account_preserves_case() {
+        assert_eq!(validate_login_account("Alice").unwrap(), "Alice");
+        assert_eq!(validate_login_account("  Bob  ").unwrap(), "Bob");
+    }
 }
