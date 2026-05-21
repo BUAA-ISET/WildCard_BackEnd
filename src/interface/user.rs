@@ -200,11 +200,9 @@ fn validate_password(password: &str, empty_message: &str) -> Result<String, AppE
 }
 
 fn generate_code() -> String {
-    let value = time::OffsetDateTime::now_utc()
-        .unix_timestamp_nanos()
-        .unsigned_abs()
-        % 900_000;
-    format!("{:06}", value + 100_000)
+    use rand::Rng;
+    let value: u32 = rand::rng().random_range(0..1_000_000);
+    format!("{value:06}")
 }
 
 fn build_token(user_id: UserId, jwt_secret: &[u8]) -> Result<String, AppError> {
@@ -757,5 +755,24 @@ mod tests {
         assert_eq!(extension_for_mime("image/gif"), None);
         assert_eq!(extension_for_mime("application/pdf"), None);
         assert_eq!(extension_for_mime(""), None);
+    }
+
+    #[test]
+    fn generate_code_returns_six_digits() {
+        for _ in 0..50 {
+            let code = super::generate_code();
+            assert_eq!(code.len(), 6);
+            assert!(code.chars().all(|c| c.is_ascii_digit()));
+        }
+    }
+
+    #[test]
+    fn generate_code_is_not_deterministic() {
+        let mut codes = std::collections::HashSet::new();
+        for _ in 0..50 {
+            codes.insert(super::generate_code());
+        }
+        // 50 个调用拿到 50 个全相同结果的概率是 (1/10^6)^49,实际上一定不会发生
+        assert!(codes.len() > 1, "generate_code 应该返回随机序列");
     }
 }
