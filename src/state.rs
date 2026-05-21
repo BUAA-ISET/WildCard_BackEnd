@@ -4,6 +4,7 @@ use axum::extract::FromRef;
 use tokio::sync::RwLock;
 
 use crate::domain::game::GameSession;
+use crate::infrastructure::email::EmailSender;
 use crate::infrastructure::user::UserRepository;
 use crate::interface::room::RoomRepository;
 use crate::interface::rule::{RulePersistence, RuleRepository};
@@ -19,6 +20,7 @@ pub struct GlobalState {
     pub games: Arc<RwLock<HashMap<String, GameSession>>>,
     pub rules: RuleStore,
     pub rooms: RoomStore,
+    pub email: EmailSender,
 }
 
 impl FromRef<GlobalState> for Arc<UserRepository> {
@@ -56,6 +58,12 @@ impl FromRef<GlobalState> for RoomStore {
 impl FromRef<GlobalState> for Arc<RwLock<HashMap<String, GameSession>>> {
     fn from_ref(input: &GlobalState) -> Self {
         input.games.clone()
+    }
+}
+
+impl FromRef<GlobalState> for EmailSender {
+    fn from_ref(input: &GlobalState) -> Self {
+        input.email.clone()
     }
 }
 

@@ -82,6 +82,7 @@ async fn main() {
             .await
             .expect("Failed to initialize rule store"),
         rooms: room::build_room_store(),
+        email: crate::infrastructure::email::EmailSender::from_env(),
     };
 
     let allowed_origins = allowed_cors_origins();
