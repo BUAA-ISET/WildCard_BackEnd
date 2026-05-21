@@ -123,6 +123,10 @@ async fn main() {
             post(user::update_password).put(user::update_password),
         )
         .route(
+            "/api/user/email",
+            post(user::update_email).put(user::update_email),
+        )
+        .route(
             "/api/rules/drafts",
             get(rule::list_drafts).post(rule::save_draft),
         )
