@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use super::auth::TokenClaims;
 use crate::error::AppError;
+use crate::infrastructure::email::EmailSender;
 use crate::infrastructure::user::UserRepository;
 use crate::{
     domain::user::{User, UserId},
@@ -234,10 +235,11 @@ pub async fn find(
         .ok_or(AppError::NotFound)
 }
 
-#[tracing::instrument]
+#[tracing::instrument(skip(email_sender))]
 pub async fn send_verification_code(
     State(user_repo): State<Arc<UserRepository>>,
     State(codes): State<Arc<RwLock<std::collections::HashMap<String, VerificationCodeRecord>>>>,
+    State(email_sender): State<EmailSender>,
     Json(payload): Json<SendVerificationCodeRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let email = validate_email(&payload.email)?;
@@ -249,20 +251,45 @@ pub async fn send_verification_code(
     let code = generate_code();
     let expires_at_unix =
         (time::OffsetDateTime::now_utc() + time::Duration::minutes(5)).unix_timestamp();
-    let mut guard = codes.write().await;
-    guard.insert(
-        email,
-        VerificationCodeRecord {
-            code: code.clone(),
-            expires_at_unix,
-        },
-    );
+    {
+        let mut guard = codes.write().await;
+        guard.insert(
+            email.clone(),
+            VerificationCodeRecord {
+                code: code.clone(),
+                expires_at_unix,
+            },
+        );
+    }
+
+    let (message, debug_code) = if email_sender.is_configured() {
+        match email_sender.send_verification_code(&email, &code).await {
+            Ok(()) => {
+                tracing::info!("verification code sent via SMTP to {email}");
+                ("验证码已发送，请检查邮箱".to_string(), None)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "SMTP send failed for {email}: {e}; returning debugCode as fallback"
+                );
+                (
+                    "邮件发送失败，已通过响应返回调试验证码".to_string(),
+                    Some(code),
+                )
+            }
+        }
+    } else {
+        (
+            "验证码已生成（开发模式：通过响应返回）".to_string(),
+            Some(code),
+        )
+    };
 
     Ok(Json(ApiResponse {
         success: true,
         data: None,
-        message: Some("验证码已发送，请检查邮箱".to_string()),
-        debug_code: Some(code),
+        message: Some(message),
+        debug_code,
     }))
 }
 
