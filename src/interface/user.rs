@@ -310,14 +310,15 @@ pub async fn register(
     }
 
     {
-        let mut guard = codes.write().await;
+        let guard = codes.read().await;
         let stored = guard
             .get(&email)
             .cloned()
             .ok_or_else(|| AppError::InvalidInput("请先发送验证码".to_string()))?;
+        drop(guard);
 
         if time::OffsetDateTime::now_utc().unix_timestamp() > stored.expires_at_unix {
-            guard.remove(&email);
+            codes.write().await.remove(&email);
             return Err(AppError::InvalidInput(
                 "验证码已过期，请重新发送".to_string(),
             ));
@@ -326,8 +327,6 @@ pub async fn register(
         if stored.code != verification_code {
             return Err(AppError::InvalidInput("验证码错误".to_string()));
         }
-
-        guard.remove(&email);
     }
 
     let user = User {
@@ -337,6 +336,9 @@ pub async fn register(
         password,
     };
     user_repo.register(user).await?;
+
+    // 仅在注册插入成功后才消费验证码，避免唯一约束等错误导致用户无法重试。
+    codes.write().await.remove(&email);
 
     let created = user_repo
         .find_by_email(&email)

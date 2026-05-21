@@ -24,10 +24,10 @@ impl UserRepository {
             .map_err(|e| {
                 if let sqlx::error::Error::Database(db_err) = &e {
                     match db_err.constraint() {
-                        Some("users_name_key") => {
+                        Some("users_name_key" | "idx_users_name") => {
                             return AppError::UserAlreadyExist("用户名已存在".to_string());
                         }
-                        Some("users_email_key") => {
+                        Some("users_email_key" | "idx_users_email") => {
                             return AppError::UserAlreadyExist("该邮箱已注册".to_string());
                         }
                         Some(other) => {
@@ -106,7 +106,7 @@ impl UserRepository {
         .map_err(|e| {
             if let sqlx::error::Error::Database(db_err) = &e {
                 match db_err.constraint() {
-                    Some("users_name_key") => {
+                    Some("users_name_key" | "idx_users_name") => {
                         return AppError::UserAlreadyExist("用户名已存在".to_string());
                     }
                     Some(other) => {
