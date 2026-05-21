@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Multipart, Query, State},
     http::{HeaderMap, header},
 };
 use axum_extra::extract::cookie::{Cookie, SameSite};
@@ -50,7 +50,7 @@ impl UserDto {
             id: user.id,
             username: user.name,
             email: user.email,
-            avatar: String::new(),
+            avatar: user.avatar,
             token: None,
         }
     }
@@ -342,6 +342,7 @@ pub async fn register(
         name: username,
         email: email.clone(),
         password,
+        avatar: String::new(),
     };
     user_repo.register(user).await?;
 
@@ -519,9 +520,83 @@ pub async fn update_email(
     Ok(Json(ApiResponse::success(UserDto::from_user(updated))))
 }
 
+const AVATAR_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+fn extension_for_mime(mime: &str) -> Option<&'static str> {
+    match mime {
+        "image/png" => Some("png"),
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/webp" => Some("webp"),
+        _ => None,
+    }
+}
+
+#[tracing::instrument(skip(multipart, upload_dir))]
+pub async fn update_avatar(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(user_repo): State<Arc<UserRepository>>,
+    State(upload_dir): State<crate::state::UploadDir>,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<UserDto>>, AppError> {
+    let mut field = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("解析上传失败：{e}")))?
+        .ok_or_else(|| AppError::InvalidInput("缺少上传文件".to_string()))?;
+
+    let content_type = field.content_type().map(str::to_string).unwrap_or_default();
+    let extension = extension_for_mime(&content_type)
+        .ok_or_else(|| AppError::InvalidInput("仅支持 png / jpeg / webp 格式".to_string()))?;
+
+    let mut bytes = Vec::with_capacity(8192);
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("读取上传内容失败：{e}")))?
+    {
+        if bytes.len() + chunk.len() > AVATAR_MAX_BYTES {
+            return Err(AppError::InvalidInput("头像不能超过 2MB".to_string()));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+
+    if bytes.is_empty() {
+        return Err(AppError::InvalidInput("上传文件为空".to_string()));
+    }
+
+    let avatars_dir = upload_dir.0.join("avatars");
+    tokio::fs::create_dir_all(&avatars_dir)
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("创建上传目录失败：{e}")))?;
+
+    let filename = format!("{}.{extension}", Uuid::new_v4());
+    let path = avatars_dir.join(&filename);
+    tokio::fs::write(&path, &bytes)
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("写入文件失败：{e}")))?;
+
+    let relative_url = format!("/static/avatars/{filename}");
+
+    let previous = user_repo.find_by_id(&user_id).await?;
+    let updated = user_repo.update_avatar(&user_id, &relative_url).await?;
+
+    // best-effort 删除旧头像，失败仅记日志，不影响接口结果
+    if let Some(prev) = previous
+        && !prev.avatar.is_empty()
+        && let Some(name) = prev.avatar.strip_prefix("/static/avatars/")
+    {
+        let old_path = avatars_dir.join(name);
+        if let Err(e) = tokio::fs::remove_file(&old_path).await {
+            tracing::warn!("failed to delete old avatar {}: {e}", old_path.display());
+        }
+    }
+
+    Ok(Json(ApiResponse::success(UserDto::from_user(updated))))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{looks_like_email, validate_login_account};
+    use super::{extension_for_mime, looks_like_email, validate_login_account};
 
     #[test]
     fn looks_like_email_detects_at_symbol() {
@@ -545,5 +620,20 @@ mod tests {
     fn validate_login_account_preserves_case() {
         assert_eq!(validate_login_account("Alice").unwrap(), "Alice");
         assert_eq!(validate_login_account("  Bob  ").unwrap(), "Bob");
+    }
+
+    #[test]
+    fn extension_for_mime_accepts_supported_image_types() {
+        assert_eq!(extension_for_mime("image/png"), Some("png"));
+        assert_eq!(extension_for_mime("image/jpeg"), Some("jpg"));
+        assert_eq!(extension_for_mime("image/jpg"), Some("jpg"));
+        assert_eq!(extension_for_mime("image/webp"), Some("webp"));
+    }
+
+    #[test]
+    fn extension_for_mime_rejects_other_types() {
+        assert_eq!(extension_for_mime("image/gif"), None);
+        assert_eq!(extension_for_mime("application/pdf"), None);
+        assert_eq!(extension_for_mime(""), None);
     }
 }

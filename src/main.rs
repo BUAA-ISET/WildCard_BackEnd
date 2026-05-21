@@ -83,6 +83,7 @@ async fn main() {
             .expect("Failed to initialize rule store"),
         rooms: room::build_room_store(),
         email: crate::infrastructure::email::EmailSender::from_env(),
+        upload_dir: crate::state::UploadDir::from_env(),
     };
 
     let allowed_origins = allowed_cors_origins();
@@ -126,6 +127,7 @@ async fn main() {
             "/api/user/email",
             post(user::update_email).put(user::update_email),
         )
+        .route("/api/user/avatar", post(user::update_avatar))
         .route(
             "/api/rules/drafts",
             get(rule::list_drafts).post(rule::save_draft),
@@ -162,6 +164,10 @@ async fn main() {
         .route(
             "/api/games/{sessionId}/actions/{actionId}/choose",
             post(room::choose_action),
+        )
+        .nest_service(
+            "/static",
+            tower_http::services::ServeDir::new(state.upload_dir.0.as_path()),
         )
         .layer(cors)
         .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans

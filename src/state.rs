@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use axum::extract::FromRef;
 use tokio::sync::RwLock;
@@ -21,6 +21,24 @@ pub struct GlobalState {
     pub rules: RuleStore,
     pub rooms: RoomStore,
     pub email: EmailSender,
+    pub upload_dir: UploadDir,
+}
+
+#[derive(Clone)]
+pub struct UploadDir(pub Arc<PathBuf>);
+
+impl UploadDir {
+    pub fn from_env() -> Self {
+        let raw = std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "./uploads".to_string());
+        Self(Arc::new(PathBuf::from(raw)))
+    }
+}
+
+impl std::ops::Deref for UploadDir {
+    type Target = PathBuf;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl FromRef<GlobalState> for Arc<UserRepository> {
@@ -64,6 +82,12 @@ impl FromRef<GlobalState> for Arc<RwLock<HashMap<String, GameSession>>> {
 impl FromRef<GlobalState> for EmailSender {
     fn from_ref(input: &GlobalState) -> Self {
         input.email.clone()
+    }
+}
+
+impl FromRef<GlobalState> for UploadDir {
+    fn from_ref(input: &GlobalState) -> Self {
+        input.upload_dir.clone()
     }
 }
 

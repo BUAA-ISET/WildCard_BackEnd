@@ -43,25 +43,47 @@ impl UserRepository {
     }
 
     pub async fn find_by_name(&self, name: &str) -> Result<Option<User>, AppError> {
-        let user = sqlx::query("SELECT id, name, email, password FROM users WHERE users.name = $1")
-            .bind(name)
-            .fetch_optional(&self.pool)
-            .await
-            .inspect_err(|e| tracing::warn!("Database error {e}"))?
-            .map(|user| User {
-                id: UserId(user.get("id")),
-                name: user.get("name"),
-                email: user.get("email"),
-                password: user.get("password"),
-            });
+        let user = sqlx::query(
+            "SELECT id, name, email, password, avatar FROM users WHERE users.name = $1",
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?
+        .map(|user| User {
+            id: UserId(user.get("id")),
+            name: user.get("name"),
+            email: user.get("email"),
+            password: user.get("password"),
+            avatar: user.get("avatar"),
+        });
 
         Ok(user)
     }
 
     pub async fn find_by_email(&self, email: &str) -> Result<Option<User>, AppError> {
+        let user = sqlx::query(
+            "SELECT id, name, email, password, avatar FROM users WHERE users.email = $1",
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?
+        .map(|user| User {
+            id: UserId(user.get("id")),
+            name: user.get("name"),
+            email: user.get("email"),
+            password: user.get("password"),
+            avatar: user.get("avatar"),
+        });
+
+        Ok(user)
+    }
+
+    pub async fn find_by_id(&self, user_id: &UserId) -> Result<Option<User>, AppError> {
         let user =
-            sqlx::query("SELECT id, name, email, password FROM users WHERE users.email = $1")
-                .bind(email)
+            sqlx::query("SELECT id, name, email, password, avatar FROM users WHERE users.id = $1")
+                .bind(user_id.0)
                 .fetch_optional(&self.pool)
                 .await
                 .inspect_err(|e| tracing::warn!("Database error {e}"))?
@@ -70,23 +92,8 @@ impl UserRepository {
                     name: user.get("name"),
                     email: user.get("email"),
                     password: user.get("password"),
+                    avatar: user.get("avatar"),
                 });
-
-        Ok(user)
-    }
-
-    pub async fn find_by_id(&self, user_id: &UserId) -> Result<Option<User>, AppError> {
-        let user = sqlx::query("SELECT id, name, email, password FROM users WHERE users.id = $1")
-            .bind(user_id.0)
-            .fetch_optional(&self.pool)
-            .await
-            .inspect_err(|e| tracing::warn!("Database error {e}"))?
-            .map(|user| User {
-                id: UserId(user.get("id")),
-                name: user.get("name"),
-                email: user.get("email"),
-                password: user.get("password"),
-            });
 
         Ok(user)
     }
@@ -97,7 +104,7 @@ impl UserRepository {
         username: &str,
     ) -> Result<User, AppError> {
         let user = sqlx::query(
-            "UPDATE users SET name = $1 WHERE id = $2 RETURNING id, name, email, password",
+            "UPDATE users SET name = $1 WHERE id = $2 RETURNING id, name, email, password, avatar",
         )
         .bind(username)
         .bind(user_id.0)
@@ -124,12 +131,13 @@ impl UserRepository {
             name: user.get("name"),
             email: user.get("email"),
             password: user.get("password"),
+            avatar: user.get("avatar"),
         })
     }
 
     pub async fn update_email(&self, user_id: &UserId, email: &str) -> Result<User, AppError> {
         let user = sqlx::query(
-            "UPDATE users SET email = $1 WHERE id = $2 RETURNING id, name, email, password",
+            "UPDATE users SET email = $1 WHERE id = $2 RETURNING id, name, email, password, avatar",
         )
         .bind(email)
         .bind(user_id.0)
@@ -156,6 +164,7 @@ impl UserRepository {
             name: user.get("name"),
             email: user.get("email"),
             password: user.get("password"),
+            avatar: user.get("avatar"),
         })
     }
 
@@ -172,6 +181,25 @@ impl UserRepository {
             .inspect_err(|e| tracing::warn!("Database error {e}"))?;
 
         Ok(())
+    }
+
+    pub async fn update_avatar(&self, user_id: &UserId, avatar: &str) -> Result<User, AppError> {
+        let user = sqlx::query(
+            "UPDATE users SET avatar = $1 WHERE id = $2 RETURNING id, name, email, password, avatar",
+        )
+        .bind(avatar)
+        .bind(user_id.0)
+        .fetch_one(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        Ok(User {
+            id: UserId(user.get("id")),
+            name: user.get("name"),
+            email: user.get("email"),
+            password: user.get("password"),
+            avatar: user.get("avatar"),
+        })
     }
 
     pub fn password_hash(password: &str) -> Result<String, AppError> {
