@@ -146,6 +146,20 @@ pub struct UpdateEmailRequest {
     pub verification_code: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetCodeRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetRequest {
+    pub email: String,
+    #[serde(rename = "verificationCode")]
+    pub verification_code: String,
+    #[serde(rename = "newPassword")]
+    pub new_password: String,
+}
+
 fn validate_email(email: &str) -> Result<String, AppError> {
     let normalized = email.trim().to_lowercase();
     if normalized.is_empty() {
@@ -592,6 +606,114 @@ pub async fn update_avatar(
     }
 
     Ok(Json(ApiResponse::success(UserDto::from_user(updated))))
+}
+
+#[tracing::instrument(skip(email_sender))]
+pub async fn password_reset_code(
+    State(user_repo): State<Arc<UserRepository>>,
+    State(codes): State<Arc<RwLock<std::collections::HashMap<String, VerificationCodeRecord>>>>,
+    State(email_sender): State<EmailSender>,
+    Json(payload): Json<PasswordResetCodeRequest>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    let email = validate_email(&payload.email)?;
+
+    // 与 send_verification_code 相反:这里要求邮箱已注册
+    if user_repo.find_by_email(&email).await?.is_none() {
+        return Err(AppError::InvalidInput("该邮箱未注册".to_string()));
+    }
+
+    let code = generate_code();
+    let expires_at_unix =
+        (time::OffsetDateTime::now_utc() + time::Duration::minutes(5)).unix_timestamp();
+    {
+        let mut guard = codes.write().await;
+        guard.insert(
+            email.clone(),
+            VerificationCodeRecord {
+                code: code.clone(),
+                expires_at_unix,
+            },
+        );
+    }
+
+    let (message, debug_code) = if email_sender.is_configured() {
+        match email_sender.send_verification_code(&email, &code).await {
+            Ok(()) => {
+                tracing::info!("password reset code sent via SMTP to {email}");
+                ("验证码已发送，请检查邮箱".to_string(), None)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "SMTP send failed for {email}: {e}; returning debugCode as fallback"
+                );
+                (
+                    "邮件发送失败，已通过响应返回调试验证码".to_string(),
+                    Some(code),
+                )
+            }
+        }
+    } else {
+        (
+            "验证码已生成（开发模式：通过响应返回）".to_string(),
+            Some(code),
+        )
+    };
+
+    Ok(Json(ApiResponse {
+        success: true,
+        data: None,
+        message: Some(message),
+        debug_code,
+    }))
+}
+
+#[tracing::instrument]
+pub async fn password_reset(
+    State(user_repo): State<Arc<UserRepository>>,
+    State(codes): State<Arc<RwLock<std::collections::HashMap<String, VerificationCodeRecord>>>>,
+    Json(payload): Json<PasswordResetRequest>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    let email = validate_email(&payload.email)?;
+    let verification_code = payload.verification_code.trim().to_string();
+    let new_password = validate_password(&payload.new_password, "请填写新密码")?;
+
+    if verification_code.is_empty() {
+        return Err(AppError::InvalidInput("请先发送验证码".to_string()));
+    }
+
+    let user = user_repo
+        .find_by_email(&email)
+        .await?
+        .ok_or_else(|| AppError::InvalidInput("该邮箱未注册".to_string()))?;
+
+    {
+        let guard = codes.read().await;
+        let stored = guard
+            .get(&email)
+            .cloned()
+            .ok_or_else(|| AppError::InvalidInput("请先发送验证码".to_string()))?;
+        drop(guard);
+
+        if time::OffsetDateTime::now_utc().unix_timestamp() > stored.expires_at_unix {
+            codes.write().await.remove(&email);
+            return Err(AppError::InvalidInput(
+                "验证码已过期，请重新发送".to_string(),
+            ));
+        }
+
+        if stored.code != verification_code {
+            return Err(AppError::InvalidInput("验证码错误".to_string()));
+        }
+    }
+
+    user_repo.update_password(&user.id, &new_password).await?;
+
+    // 仅在改密成功后才消费验证码
+    codes.write().await.remove(&email);
+
+    Ok(Json(ApiResponse::success_without_data(Some(
+        "密码已重置，请用新密码登录".to_string(),
+    ))))
 }
 
 #[cfg(test)]

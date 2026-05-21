@@ -110,6 +110,11 @@ async fn main() {
     let app = Router::new()
         .route("/api/user/register", post(user::register))
         .route("/api/user/send-code", post(user::send_verification_code))
+        .route(
+            "/api/user/password-reset-code",
+            post(user::password_reset_code),
+        )
+        .route("/api/user/password-reset", post(user::password_reset))
         .route("/api/user/find", get(user::find))
         .route("/api/user/login", post(user::login))
         .route("/api/user/logout", post(user::logout).get(user::logout))
