@@ -127,6 +127,38 @@ impl UserRepository {
         })
     }
 
+    pub async fn update_email(&self, user_id: &UserId, email: &str) -> Result<User, AppError> {
+        let user = sqlx::query(
+            "UPDATE users SET email = $1 WHERE id = $2 RETURNING id, name, email, password",
+        )
+        .bind(email)
+        .bind(user_id.0)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| {
+            if let sqlx::error::Error::Database(db_err) = &e {
+                match db_err.constraint() {
+                    Some("users_email_key" | "idx_users_email") => {
+                        return AppError::UserAlreadyExist("该邮箱已被占用".to_string());
+                    }
+                    Some(other) => {
+                        tracing::warn!("Unexpected constraint {other}");
+                    }
+                    None => {}
+                }
+            }
+            tracing::warn!("Database error {e}");
+            AppError::DatabaseError(e)
+        })?;
+
+        Ok(User {
+            id: UserId(user.get("id")),
+            name: user.get("name"),
+            email: user.get("email"),
+            password: user.get("password"),
+        })
+    }
+
     pub async fn update_password(
         &self,
         user_id: &UserId,

@@ -138,6 +138,14 @@ pub struct UpdatePasswordRequest {
     pub new_password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateEmailRequest {
+    #[serde(rename = "newEmail")]
+    pub new_email: String,
+    #[serde(rename = "verificationCode")]
+    pub verification_code: String,
+}
+
 fn validate_email(email: &str) -> Result<String, AppError> {
     let normalized = email.trim().to_lowercase();
     if normalized.is_empty() {
@@ -458,6 +466,57 @@ pub async fn update_password(
     Ok(Json(ApiResponse::success_without_data(Some(
         "密码更新成功".to_string(),
     ))))
+}
+
+#[tracing::instrument]
+pub async fn update_email(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(user_repo): State<Arc<UserRepository>>,
+    State(codes): State<Arc<RwLock<std::collections::HashMap<String, VerificationCodeRecord>>>>,
+    Json(payload): Json<UpdateEmailRequest>,
+) -> Result<Json<ApiResponse<UserDto>>, AppError> {
+    let new_email = validate_email(&payload.new_email)?;
+    let verification_code = payload.verification_code.trim().to_string();
+
+    if verification_code.is_empty() {
+        return Err(AppError::InvalidInput("请先发送验证码".to_string()));
+    }
+
+    let current = user_repo
+        .find_by_id(&user_id)
+        .await?
+        .ok_or(AppError::Unauthorized("未登录".to_string()))?;
+
+    if current.email == new_email {
+        return Err(AppError::InvalidInput("新邮箱与当前邮箱相同".to_string()));
+    }
+
+    {
+        let guard = codes.read().await;
+        let stored = guard
+            .get(&new_email)
+            .cloned()
+            .ok_or_else(|| AppError::InvalidInput("请先发送验证码".to_string()))?;
+        drop(guard);
+
+        if time::OffsetDateTime::now_utc().unix_timestamp() > stored.expires_at_unix {
+            codes.write().await.remove(&new_email);
+            return Err(AppError::InvalidInput(
+                "验证码已过期，请重新发送".to_string(),
+            ));
+        }
+
+        if stored.code != verification_code {
+            return Err(AppError::InvalidInput("验证码错误".to_string()));
+        }
+    }
+
+    let updated = user_repo.update_email(&user_id, &new_email).await?;
+
+    // 仅在更新成功后消费验证码，避免唯一约束冲突等情况下用户需要重发。
+    codes.write().await.remove(&new_email);
+
+    Ok(Json(ApiResponse::success(UserDto::from_user(updated))))
 }
 
 #[cfg(test)]
