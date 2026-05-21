@@ -28,11 +28,19 @@ pub struct SmtpConfig {
 
 impl SmtpConfig {
     pub fn from_env() -> Option<Self> {
-        let host = env::var("SMTP_HOST").ok().filter(|s| !s.trim().is_empty())?;
+        let host = env::var("SMTP_HOST")
+            .ok()
+            .filter(|s| !s.trim().is_empty())?;
         let port = env::var("SMTP_PORT").ok()?.trim().parse::<u16>().ok()?;
-        let user = env::var("SMTP_USER").ok().filter(|s| !s.trim().is_empty())?;
-        let pass = env::var("SMTP_PASS").ok().filter(|s| !s.trim().is_empty())?;
-        let from = env::var("SMTP_FROM").ok().filter(|s| !s.trim().is_empty())?;
+        let user = env::var("SMTP_USER")
+            .ok()
+            .filter(|s| !s.trim().is_empty())?;
+        let pass = env::var("SMTP_PASS")
+            .ok()
+            .filter(|s| !s.trim().is_empty())?;
+        let from = env::var("SMTP_FROM")
+            .ok()
+            .filter(|s| !s.trim().is_empty())?;
         Some(Self {
             host,
             port,
@@ -84,20 +92,18 @@ impl EmailSender {
         self.inner.is_some()
     }
 
-    pub async fn send_verification_code(
-        &self,
-        to: &str,
-        code: &str,
-    ) -> Result<(), EmailSendError> {
+    pub async fn send_verification_code(&self, to: &str, code: &str) -> Result<(), EmailSendError> {
         let inner = self.inner.as_ref().ok_or(EmailSendError::NotConfigured)?;
         let body = build_verification_body(code);
         let from = inner
             .from
             .parse()
-            .map_err(|e: lettre::address::AddressError| EmailSendError::InvalidAddress(e.to_string()))?;
-        let to_addr = to
-            .parse()
-            .map_err(|e: lettre::address::AddressError| EmailSendError::InvalidAddress(e.to_string()))?;
+            .map_err(|e: lettre::address::AddressError| {
+                EmailSendError::InvalidAddress(e.to_string())
+            })?;
+        let to_addr = to.parse().map_err(|e: lettre::address::AddressError| {
+            EmailSendError::InvalidAddress(e.to_string())
+        })?;
         let msg = Message::builder()
             .from(from)
             .to(to_addr)
