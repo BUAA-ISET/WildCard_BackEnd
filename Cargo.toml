@@ -30,4 +30,5 @@ uuid = { version="1.23.1", features = ["serde", "v4"] }
 mockall = "0.13.1"
 rstest = "0.26.1"
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
 tungstenite = "0.21.0"
