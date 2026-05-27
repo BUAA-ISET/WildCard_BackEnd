@@ -911,7 +911,7 @@ fn active_flow<'a>(
     match session.active_flow.as_str() {
         "match" => Ok(&runtime_rule.match_flow),
         "end" => Ok(&runtime_rule.end_flow),
-        other => Err(AppError::InvalidInput(format!("未知流程: {other}"))),
+        other => Err(AppError::InvalidInput(format!("未知流程：{other}"))),
     }
 }
 
@@ -1462,16 +1462,16 @@ fn resolve_component_property_access(
             }
             29 => {
                 if let Some(compare) = eval_ctx.compare {
-                    if property == "牌型A" {
+                    if property == "牌型 A" {
                         return Ok(EvalValue::Cardset(compare.cardset_a.clone()));
                     }
-                    if property == "牌型B" {
+                    if property == "牌型 B" {
                         return Ok(EvalValue::Cardset(compare.cardset_b.clone()));
                     }
                     if let Some((prefix, field)) = property.split_once('.') {
-                        let target = if prefix == "牌型A" {
+                        let target = if prefix == "牌型 A" {
                             Some(&compare.cardset_a)
-                        } else if prefix == "牌型B" {
+                        } else if prefix == "牌型 B" {
                             Some(&compare.cardset_b)
                         } else {
                             None
@@ -1567,14 +1567,14 @@ fn access_property_from_value(property: &str, source: EvalValue) -> Result<EvalV
             if property == "cards" || property == "牌组" {
                 return Ok(EvalValue::Cards(cardset.cards));
             }
-            if property == "cardsetId" || property == "牌型ID" {
+            if property == "cardsetId" || property == "牌型 ID" {
                 return Ok(EvalValue::Int(extract_numeric_suffix(&cardset.cardset_id)));
             }
             if property == "cardsetName" || property == "牌型名" {
                 return Ok(EvalValue::Int(0));
             }
             if let Some((prefix, field)) = property.split_once('.') {
-                if (prefix == "牌型A" || prefix == "牌型B") && !field.is_empty() {
+                if (prefix == "牌型 A" || prefix == "牌型 B") && !field.is_empty() {
                     return Ok(EvalValue::Int(
                         cardset.properties.get(field).copied().unwrap_or_default(),
                     ));
@@ -1875,7 +1875,7 @@ fn validate_unique_names<'a>(
         }
         if !seen.insert(name) {
             return Err(AppError::InvalidInput(format!(
-                "{scope} 存在重复项: {name}"
+                "{scope} 存在重复项：{name}"
             )));
         }
     }
@@ -2036,7 +2036,7 @@ fn resolve_keyword_value(
 
     if matches!(
         normalized,
-        "A" | "a" | "cardsetA" | "cardset_a" | "currentRound" | "current_round" | "牌型A"
+        "A" | "a" | "cardsetA" | "cardset_a" | "currentRound" | "current_round" | "牌型 A"
     ) {
         return Ok(eval_ctx
             .compare
@@ -2045,7 +2045,7 @@ fn resolve_keyword_value(
 
     if matches!(
         normalized,
-        "B" | "b" | "cardsetB" | "cardset_b" | "previousRound" | "previous_round" | "牌型B"
+        "B" | "b" | "cardsetB" | "cardset_b" | "previousRound" | "previous_round" | "牌型 B"
     ) {
         return Ok(eval_ctx
             .compare
@@ -2519,7 +2519,7 @@ fn select_cards_from_hand(
             .iter()
             .find(|card| &card.id == card_id)
             .cloned()
-            .ok_or_else(|| AppError::InvalidInput(format!("所选牌不在当前手牌中: {card_id}")))?;
+            .ok_or_else(|| AppError::InvalidInput(format!("所选牌不在当前手牌中：{card_id}")))?;
         selected.push(card);
     }
     Ok(selected)

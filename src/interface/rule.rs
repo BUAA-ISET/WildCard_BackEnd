@@ -507,7 +507,7 @@ impl RulePersistence {
     pub async fn save_draft(&self, draft: &RuleDraft) -> Result<(), AppError> {
         let design = serde_json::to_value(&draft.design).map_err(AppError::JsonError)?;
         let owner_id = Uuid::parse_str(&draft.owner_id)
-            .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效: {e}")))?;
+            .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效：{e}")))?;
         let status = match draft.status {
             RuleStatus::Draft => "draft",
             RuleStatus::Published => "published",
@@ -554,7 +554,7 @@ impl RulePersistence {
     ) -> Result<(), AppError> {
         let design = serde_json::to_value(&rule.design).map_err(AppError::JsonError)?;
         let owner_id = Uuid::parse_str(&rule.owner_id)
-            .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效: {e}")))?;
+            .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效：{e}")))?;
 
         sqlx::query(
             r#"
@@ -591,7 +591,7 @@ impl RulePersistence {
 
     pub async fn delete_draft(&self, draft_id: &str, owner_id: &str) -> Result<(), AppError> {
         let owner_id = Uuid::parse_str(owner_id)
-            .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效: {e}")))?;
+            .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效：{e}")))?;
 
         sqlx::query(
             r#"

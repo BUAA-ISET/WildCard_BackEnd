@@ -220,7 +220,7 @@ fn build_token(user_id: UserId, jwt_secret: &[u8]) -> Result<String, AppError> {
         &claims,
         &EncodingKey::from_secret(jwt_secret),
     )
-    .map_err(|e| AppError::InvalidInput(format!("Token 生成失败: {e}")))
+    .map_err(|e| AppError::InvalidInput(format!("Token 生成失败：{e}")))
 }
 
 fn build_auth_cookie(token: &str) -> Cookie<'static> {
@@ -615,7 +615,7 @@ pub async fn password_reset_code(
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let email = validate_email(&payload.email)?;
 
-    // 与 send_verification_code 相反:这里要求邮箱已注册
+    // 与 send_verification_code 相反：这里要求邮箱已注册
     if user_repo.find_by_email(&email).await?.is_none() {
         return Err(AppError::InvalidInput("该邮箱未注册".to_string()));
     }
@@ -772,7 +772,7 @@ mod tests {
         for _ in 0..50 {
             codes.insert(super::generate_code());
         }
-        // 50 个调用拿到 50 个全相同结果的概率是 (1/10^6)^49,实际上一定不会发生
+        // 50 个调用拿到 50 个全相同结果的概率是 (1/10^6)^49，实际上一定不会发生
         assert!(codes.len() > 1, "generate_code 应该返回随机序列");
     }
 }
