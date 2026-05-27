@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::{
     Json,
     extract::{Multipart, Query, State},
@@ -8,6 +6,7 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use jsonwebtoken::{EncodingKey, Header};
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -191,10 +190,10 @@ fn validate_username(username: &str) -> Result<String, AppError> {
     Ok(normalized)
 }
 
-fn validate_password(password: &str, empty_message: &str) -> Result<String, AppError> {
+fn validate_password(password: &str) -> Result<String, AppError> {
     let normalized = password.trim().to_string();
     if normalized.is_empty() {
-        return Err(AppError::InvalidInput(empty_message.to_string()));
+        return Err(AppError::InvalidInput("密码不能为空".to_string()));
     }
     Ok(normalized)
 }
@@ -317,12 +316,12 @@ pub async fn send_verification_code(
 pub async fn register(
     State(JwtSecret(jwt_secret)): State<JwtSecret>,
     State(user_repo): State<Arc<UserRepository>>,
-    State(codes): State<Arc<RwLock<std::collections::HashMap<String, VerificationCodeRecord>>>>,
+    State(codes): State<Arc<RwLock<HashMap<String, VerificationCodeRecord>>>>,
     Json(payload): Json<RegisterUserRequest>,
 ) -> Result<(HeaderMap, Json<ApiResponse<UserDto>>), AppError> {
     let email = validate_email(&payload.email)?;
     let username = validate_username(&payload.username)?;
-    let password = validate_password(&payload.password, "请输入密码")?;
+    let password = validate_password(&payload.password)?;
     let verification_code = payload.verification_code.trim().to_string();
 
     if verification_code.is_empty() {
@@ -386,7 +385,7 @@ pub async fn login(
     Json(payload): Json<LoginRequest>,
 ) -> Result<(HeaderMap, Json<ApiResponse<UserDto>>), AppError> {
     let account = validate_login_account(&payload.email)?;
-    let password = validate_password(&payload.password, "请输入邮箱和密码")?;
+    let password = validate_password(&payload.password)?;
 
     let user = if looks_like_email(&account) {
         user_repo.find_by_email(&account.to_lowercase()).await?
@@ -462,8 +461,8 @@ pub async fn update_password(
     State(user_repo): State<Arc<UserRepository>>,
     Json(payload): Json<UpdatePasswordRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    let current_password = validate_password(&payload.current_password, "请填写所有密码字段")?;
-    let new_password = validate_password(&payload.new_password, "请填写所有密码字段")?;
+    let current_password = validate_password(&payload.current_password)?;
+    let new_password = validate_password(&payload.new_password)?;
 
     let user = user_repo
         .find_by_id(&user_id)
@@ -668,12 +667,12 @@ pub async fn password_reset_code(
 #[tracing::instrument]
 pub async fn password_reset(
     State(user_repo): State<Arc<UserRepository>>,
-    State(codes): State<Arc<RwLock<std::collections::HashMap<String, VerificationCodeRecord>>>>,
+    State(codes): State<Arc<RwLock<HashMap<String, VerificationCodeRecord>>>>,
     Json(payload): Json<PasswordResetRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let email = validate_email(&payload.email)?;
     let verification_code = payload.verification_code.trim().to_string();
-    let new_password = validate_password(&payload.new_password, "请填写新密码")?;
+    let new_password = validate_password(&payload.new_password)?;
 
     if verification_code.is_empty() {
         return Err(AppError::InvalidInput("请先发送验证码".to_string()));

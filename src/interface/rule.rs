@@ -75,16 +75,13 @@ pub struct PublishedRule {
     pub id: String,
     pub owner_id: String,
     pub name: String,
-    #[serde(rename = "playerCount")]
     pub player_count: u8,
     pub description: String,
     pub version: u32,
     pub design: ExportedRuleDesign,
     #[serde(skip_serializing)]
     pub runtime: RuntimeRule,
-    #[serde(rename = "createdAt")]
     pub created_at: i64,
-    #[serde(rename = "updatedAt")]
     pub updated_at: i64,
 }
 
@@ -361,7 +358,7 @@ pub async fn rule_options(
 
 impl RulePersistence {
     pub async fn ensure_schema(&self) -> Result<(), AppError> {
-        sqlx::query(
+        sqlx::query!(
             r#"
             CREATE TABLE IF NOT EXISTS rule_drafts (
                 id VARCHAR(128) PRIMARY KEY,
@@ -381,7 +378,7 @@ impl RulePersistence {
         .await
         .inspect_err(|e| tracing::warn!("Database error {e}"))?;
 
-        sqlx::query(
+        sqlx::query!(
             r#"
             CREATE INDEX IF NOT EXISTS idx_rule_drafts_owner_updated
                 ON rule_drafts(owner_id, updated_at DESC)
@@ -391,7 +388,7 @@ impl RulePersistence {
         .await
         .inspect_err(|e| tracing::warn!("Database error {e}"))?;
 
-        sqlx::query(
+        sqlx::query!(
             r#"
             CREATE TABLE IF NOT EXISTS rule_published (
                 id VARCHAR(128) PRIMARY KEY,
@@ -411,7 +408,7 @@ impl RulePersistence {
         .await
         .inspect_err(|e| tracing::warn!("Database error {e}"))?;
 
-        sqlx::query(
+        sqlx::query!(
             r#"
             CREATE INDEX IF NOT EXISTS idx_rule_published_owner_updated
                 ON rule_published(owner_id, updated_at DESC)
@@ -425,7 +422,7 @@ impl RulePersistence {
     }
 
     pub async fn load_into(&self, repository: &mut RuleRepository) -> Result<(), AppError> {
-        let draft_rows = sqlx::query(
+        let draft_rows = sqlx::query!(
             r#"
             SELECT id, owner_id, name, player_count, description, status, design,
                    published_rule_id, created_at, updated_at
@@ -460,7 +457,7 @@ impl RulePersistence {
             repository.drafts.insert(draft.id.clone(), draft);
         }
 
-        let published_rows = sqlx::query(
+        let published_rows = sqlx::query!(
             r#"
             SELECT id, owner_id, name, player_count, description, version, design,
                    created_at, updated_at
@@ -513,7 +510,7 @@ impl RulePersistence {
             RuleStatus::Published => "published",
         };
 
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO rule_drafts (
                 id, owner_id, name, player_count, description, status, design,
@@ -556,7 +553,7 @@ impl RulePersistence {
         let owner_id = Uuid::parse_str(&rule.owner_id)
             .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效：{e}")))?;
 
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO rule_published (
                 id, draft_id, owner_id, name, player_count, description, version,
@@ -593,7 +590,7 @@ impl RulePersistence {
         let owner_id = Uuid::parse_str(owner_id)
             .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效：{e}")))?;
 
-        sqlx::query(
+        sqlx::query!(
             r#"
             DELETE FROM rule_published
             WHERE draft_id = $1 AND owner_id = $2
@@ -605,7 +602,7 @@ impl RulePersistence {
         .await
         .inspect_err(|e| tracing::warn!("Database error {e}"))?;
 
-        sqlx::query(
+        sqlx::query!(
             r#"
             DELETE FROM rule_drafts
             WHERE id = $1 AND owner_id = $2
