@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO rule_drafts (\n                id, owner_id, name, player_count, description, status, design,\n                published_rule_id\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n            ON CONFLICT (id) DO UPDATE SET\n                name = EXCLUDED.name,\n                player_count = EXCLUDED.player_count,\n                description = EXCLUDED.description,\n                status = EXCLUDED.status,\n                design = EXCLUDED.design,\n                updated_at = DEFAULT\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Int2",
+        "Text",
+        "Varchar",
+        "Jsonb",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d8d481157638baa6cac50c80e76dccdd996b0c32dabe152c3ec250395ae1f233"
+}

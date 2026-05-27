@@ -1,26 +1,24 @@
-mod domain;
-mod error;
-mod infrastructure;
-mod interface;
-mod state;
+pub mod domain;
+pub mod error;
+pub mod infrastructure;
+pub mod interface;
+pub mod state;
 
+use crate::infrastructure::email::{EmailSender, SmtpConfig};
+use crate::infrastructure::room::RoomRepository;
+use crate::infrastructure::rule::RuleRepository;
 use crate::infrastructure::user::UserRepository;
-use crate::interface::{room, rule, user};
-use crate::state::{GlobalState, JwtSecret};
-
+use crate::state::{GlobalState, JwtSecret, UploadDir};
 use axum::{
     Router,
-    http::{HeaderName, HeaderValue, Method},
     routing::{get, post},
 };
+use deadpool_redis::Config as RedisConfig;
 use dotenv::dotenv;
 use sqlx::PgPool;
-use std::{collections::HashSet, env, sync::Arc};
+use std::{env, sync::Arc};
 use tokio::sync::RwLock;
-use tower_http::{
-    cors::{AllowOrigin, CorsLayer},
-    trace::TraceLayer,
-};
+use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -63,66 +61,89 @@ async fn main() {
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     info!("Load environment DATABASE_URL={database_url}");
 
+    let redis_url = env::var("REDIS_URL").expect("REDIS_URL must be set");
+    info!("Load environment REDIS_URL={redis_url}");
+
     let secret_key = env::var("SECRET_KEY").expect("SECRET_KEY must be set for generating JWT");
     info!("Load environment SECRET_KEY={secret_key}");
 
     let listen_address = env::var("LISTEN_ADDRESS").unwrap_or("0.0.0.0:3000".to_string());
     info!("Load environment LISTEN_ADDRESS={listen_address}");
 
+    let upload_dir = env::var("UPLOAD_DIR").unwrap_or("/uploads".to_string());
+    info!("Load environment UPLOAD_DIR={upload_dir}");
+
+    let smtp_config = SmtpConfig {
+        host: env::var("SMTP_HOST").expect("SMTP_HOST must be set"),
+        port: env::var("SMTP_PORT")
+            .expect("SMTP_PORT must be set")
+            .trim()
+            .parse()
+            .expect("SMTP_PORT can not be parsed"),
+        username: env::var("SMTP_USER").expect("SMTP_USER must be set"),
+        password: env::var("SMTP_PASS").expect("SMTP_PASS must be set"),
+        from: env::var("SMTP_FROM")
+            .expect("SMTP_FROM must be set")
+            .parse()
+            .expect("SMTP_FROM can not be parsed"),
+    };
+    info!(
+        "Load SMTP environment: smtp={}:{}, username={}@{}, from={}",
+        smtp_config.host,
+        smtp_config.port,
+        smtp_config.username,
+        smtp_config.password,
+        smtp_config.from
+    );
+
+    let email_sender = EmailSender::build(smtp_config).expect("EmailSender build fail");
+
     // Connect to postgres database.
-    let pool = PgPool::connect_lazy(&database_url).expect("Failed to connect to the database");
+    let pg_pool = PgPool::connect_lazy(&database_url).expect("Failed to connect to the database");
+    let redis_pool = RedisConfig::from_url(&redis_url)
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+        .expect("无法创建连接池");
 
     let state = GlobalState {
         jwt_secret: JwtSecret(secret_key.into_bytes()),
-        user: Arc::new(UserRepository { pool: pool.clone() }),
-        verification_codes: Arc::new(RwLock::new(Default::default())),
-
+        user: Arc::new(UserRepository {
+            pg_pool: pg_pool.to_owned(),
+            redis_pool,
+        }),
         games: Arc::new(RwLock::new(Default::default())),
-        rules: rule::build_rule_store(&pool)
-            .await
-            .expect("Failed to initialize rule store"),
-        rooms: room::build_room_store(),
-        email: crate::infrastructure::email::EmailSender::from_env(),
-        upload_dir: crate::state::UploadDir::from_env(),
+        rules: Arc::new(RuleRepository {
+            pg_pool: pg_pool.to_owned(),
+        }),
+        rooms: Arc::new(RoomRepository {
+            pg_pool: pg_pool.to_owned(),
+        }),
+        email: Arc::new(email_sender),
+        upload_dir: UploadDir(upload_dir.into()),
     };
 
-    let allowed_origins = allowed_cors_origins();
-    let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::predicate(move |origin, _request_parts| {
-            is_allowed_cors_origin(origin, &allowed_origins)
-        }))
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PUT,
-            Method::DELETE,
-            Method::OPTIONS,
-        ])
-        .allow_headers([
-            axum::http::header::CONTENT_TYPE,
-            axum::http::header::AUTHORIZATION,
-            HeaderName::from_static("x-player-id"),
-            HeaderName::from_static("x-player-name"),
-            HeaderName::from_static("x-player-avatar"),
-        ])
-        .allow_credentials(true);
+    let app = create_route(state);
 
-    let app = Router::new()
+    let listener = tokio::net::TcpListener::bind(&listen_address)
+        .await
+        .unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+
+fn create_route(state: GlobalState) -> axum::Router {
+    use crate::interface::*;
+
+    Router::new()
         .route("/api/user/register", post(user::register))
-        .route("/api/user/send-code", post(user::send_verification_code))
-        .route(
-            "/api/user/password-reset-code",
-            post(user::password_reset_code),
-        )
+        .route("/api/user/send-code", post(user::verification_code))
         .route("/api/user/password-reset", post(user::password_reset))
         .route("/api/user/find", get(user::find))
         .route("/api/user/login", post(user::login))
-        .route("/api/user/logout", post(user::logout).get(user::logout))
+        .route("/api/user/logout", post(user::logout))
         .route("/api/user/current", get(user::current))
         .route("/api/user/me", get(user::current))
         .route(
             "/api/user/username",
-            post(user::update_username).put(user::update_username),
+            post(user::update_user_name).put(user::update_user_name),
         )
         .route(
             "/api/user/password",
@@ -170,45 +191,6 @@ async fn main() {
             "/api/games/{sessionId}/actions/{actionId}/choose",
             post(room::choose_action),
         )
-        .nest_service(
-            "/static",
-            tower_http::services::ServeDir::new(state.upload_dir.0.as_path()),
-        )
-        .layer(cors)
         .layer(TraceLayer::new_for_http()) // Add a TraceLayer to automatically create and enter spans
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind(&listen_address)
-        .await
-        .unwrap();
-    axum::serve(listener, app).await.unwrap();
-}
-
-fn allowed_cors_origins() -> HashSet<String> {
-    let mut origins = HashSet::from([
-        "http://localhost:5173".to_string(),
-        "http://127.0.0.1:5173".to_string(),
-        "http://localhost:8084".to_string(),
-        "http://127.0.0.1:8084".to_string(),
-    ]);
-
-    if let Ok(configured_origins) = env::var("CORS_ALLOWED_ORIGINS") {
-        origins.extend(
-            configured_origins
-                .split(',')
-                .map(str::trim)
-                .filter(|origin| !origin.is_empty())
-                .map(ToOwned::to_owned),
-        );
-    }
-
-    origins
-}
-
-fn is_allowed_cors_origin(origin: &HeaderValue, allowed_origins: &HashSet<String>) -> bool {
-    let Ok(origin) = origin.to_str() else {
-        return false;
-    };
-
-    allowed_origins.contains(origin) || origin.starts_with("http://") && origin.ends_with(":8084")
+        .with_state(state)
 }

@@ -3,6 +3,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::email::MailAddress;
+
 #[derive(PartialEq, PartialOrd, Eq, Clone, Serialize, Deserialize, Debug)]
 pub struct UserId(pub Uuid);
 
@@ -16,7 +18,8 @@ impl fmt::Display for UserId {
 pub struct User {
     pub id: UserId,
     pub name: String,
-    pub email: String,
-    pub password: String,
+    pub email: MailAddress,
     pub avatar: String,
+    #[serde(skip_serializing)]
+    pub password: String,
 }
