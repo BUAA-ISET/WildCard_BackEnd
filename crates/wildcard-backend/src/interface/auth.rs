@@ -1,7 +1,7 @@
 use crate::{domain::user::UserId, error::AppError, state::JwtSecret};
 use axum::{
     extract::{FromRef, FromRequestParts},
-    http::{self, header},
+    http::{self},
 };
 use axum_extra::extract::CookieJar;
 use jsonwebtoken::{self, DecodingKey, Validation};
@@ -28,21 +28,13 @@ where
         let JwtSecret(jwt_secret) = JwtSecret::from_ref(state);
 
         let jar = CookieJar::from_headers(&parts.headers);
-        let cookie_token = jar.get("token").map(|cookie| cookie.value().to_string());
-        let bearer_token = parts
-            .headers
-            .get(header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.strip_prefix("Bearer "))
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-        let token = bearer_token
-            .or(cookie_token)
-            .ok_or(AppError::Unauthorized("未找到登录凭证".to_string()))?;
+        let token = jar
+            .get("token")
+            .map(|cookie| cookie.value())
+            .ok_or(AppError::Unauthorized("未找到登录标签".to_string()))?;
 
         let token_data = jsonwebtoken::decode::<TokenClaims>(
-            &token,
+            token,
             &DecodingKey::from_secret(&jwt_secret),
             &Validation::default(),
         )

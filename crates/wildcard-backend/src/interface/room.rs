@@ -14,7 +14,6 @@ use crate::{
     error::AppError,
     infrastructure::user::UserRepository,
     interface::{auth::TokenClaims, user::ApiResponse},
-    state::{RoomStore, RuleStore},
 };
 
 #[derive(Debug, Default)]

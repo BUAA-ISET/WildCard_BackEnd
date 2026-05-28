@@ -27,9 +27,6 @@ use crate::{
     state::JwtSecret,
 };
 
-type SharedRoomStore = Arc<RwLock<HashMap<String, Room>>>;
-type SharedGameStore = Arc<RwLock<HashMap<String, GameSession>>>;
-
 #[derive(Debug)]
 pub enum GameApiError {
     BadRequest(String),
@@ -75,7 +72,9 @@ pub struct CurrentGameQuery {
 }
 
 const SUITS: [&str; 4] = ["♠", "♥", "♣", "♦"];
-const RANKS: [&str; 13] = ["3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A", "2"];
+const RANKS: [&str; 13] = [
+    "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A", "2",
+];
 
 fn build_deck() -> Vec<GameCard> {
     let mut deck = Vec::with_capacity(SUITS.len() * RANKS.len());
@@ -212,11 +211,7 @@ async fn release_room_after_game(rooms: &SharedRoomStore, room_code: &str) {
     }
 }
 
-async fn finalize_finished_game(
-    games: &SharedGameStore,
-    rooms: &SharedRoomStore,
-    room_code: &str,
-) {
+async fn finalize_finished_game(games: &SharedGameStore, rooms: &SharedRoomStore, room_code: &str) {
     release_room_after_game(rooms, room_code).await;
     end_game_for_room(games, room_code).await;
 }
@@ -344,7 +339,8 @@ pub async fn play_cards(
             played_cards.push(player.hand_cards.remove(index));
         }
 
-        let player_just_finished = player.hand_cards.is_empty() && player.finished_at_turn.is_none();
+        let player_just_finished =
+            player.hand_cards.is_empty() && player.finished_at_turn.is_none();
         if player_just_finished {
             player.finished_at_turn = Some(session.turn);
         }

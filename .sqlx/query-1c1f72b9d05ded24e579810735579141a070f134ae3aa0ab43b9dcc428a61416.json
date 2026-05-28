@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, name, email, password FROM users WHERE users.id = $1",
+  "query": "\n            WITH old_data AS (\n                SELECT avatar AS old_avatar FROM users WHERE id = $2\n            )\n            UPDATE users SET avatar = $1 FROM old_data\n            RETURNING id, name, email, avatar, password, old_avatar\n            ",
   "describe": {
     "columns": [
       {
@@ -20,12 +20,23 @@
       },
       {
         "ordinal": 3,
+        "name": "avatar",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
         "name": "password",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "old_avatar",
         "type_info": "Varchar"
       }
     ],
     "parameters": {
       "Left": [
+        "Varchar",
         "Uuid"
       ]
     },
@@ -33,8 +44,10 @@
       false,
       false,
       false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "eb73886aaca4212046c3d632d7fdbe3bb3c31169b80742e35e12662e1fabd91c"
+  "hash": "1c1f72b9d05ded24e579810735579141a070f134ae3aa0ab43b9dcc428a61416"
 }
