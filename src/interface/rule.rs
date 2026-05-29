@@ -718,85 +718,89 @@ fn build_builtin_test_rule() -> Option<PublishedRule> {
     })
 }
 
+struct BuiltinRuleSpec {
+    id: &'static str,
+    name: &'static str,
+    player_count: u8,
+    description: &'static str,
+    design_file: &'static str,
+}
+
+const BUILTIN_RULES: &[BuiltinRuleSpec] = &[
+    BuiltinRuleSpec {
+        id: "builtin-test2-rule",
+        name: "Tiny Demo",
+        player_count: 2,
+        description: "Minimal playable builtin rule loaded from test2.json.",
+        design_file: "test2.json",
+    },
+    BuiltinRuleSpec {
+        id: "builtin-test-rule",
+        name: "Duel Demo",
+        player_count: 2,
+        description: "Playable builtin rule loaded from test.json.",
+        design_file: "test.json",
+    },
+    BuiltinRuleSpec {
+        id: "classic",
+        name: "Classic Demo",
+        player_count: 2,
+        description: "Legacy room rule kept for compatibility. Uses the same duel flow as test.json.",
+        design_file: "test.json",
+    },
+    BuiltinRuleSpec {
+        id: "party",
+        name: "Party Demo",
+        player_count: 2,
+        description: "Legacy room rule kept for compatibility. Uses the same duel flow as test.json.",
+        design_file: "test.json",
+    },
+    BuiltinRuleSpec {
+        id: "builtin-war-rule",
+        name: "War 拼点战争",
+        player_count: 2,
+        description: "经典战争玩法：每人 5 张手牌，连续 5 轮翻牌比大小，赢得轮数多者胜。",
+        design_file: "war.json",
+    },
+    BuiltinRuleSpec {
+        id: "builtin-99-rule",
+        name: "99 累加",
+        player_count: 2,
+        description: "经典累加玩法：每人 14 张牌，轮流出牌把点数加进桌面总和；让总和超过 99 的玩家输。",
+        design_file: "nine_nine.json",
+    },
+];
+
 fn build_builtin_rules() -> Vec<PublishedRule> {
+    let mut cache: HashMap<&'static str, ExportedRuleDesign> = HashMap::new();
     let mut rules = Vec::new();
 
-    if let Some(design) = load_builtin_test2_design() {
-        rules.extend(
-            [(
-                "builtin-test2-rule",
-                "Tiny Demo",
-                2,
-                "Minimal playable builtin rule loaded from test2.json.",
-            )]
-            .into_iter()
-            .filter_map(|(id, name, player_count, description)| {
-                build_builtin_rule(id, name, player_count, description, design.clone())
-            }),
-        );
+    for spec in BUILTIN_RULES {
+        let design = match cache.get(spec.design_file) {
+            Some(design) => design.clone(),
+            None => match load_builtin_design(spec.design_file) {
+                Some(design) => {
+                    cache.insert(spec.design_file, design.clone());
+                    design
+                }
+                None => continue,
+            },
+        };
+        if let Some(rule) = build_builtin_rule(
+            spec.id,
+            spec.name,
+            spec.player_count,
+            spec.description,
+            design,
+        ) {
+            rules.push(rule);
+        }
     }
-
-    if let Some(design) = load_builtin_test_design() {
-        rules.extend(
-            [
-                (
-                    "builtin-test-rule",
-                    "Duel Demo",
-                    2,
-                    "Playable builtin rule loaded from test.json.",
-                ),
-                (
-                    "classic",
-                    "Classic Demo",
-                    2,
-                    "Legacy room rule kept for compatibility. Uses the same duel flow as test.json.",
-                ),
-                (
-                    "party",
-                    "Party Demo",
-                    2,
-                    "Legacy room rule kept for compatibility. Uses the same duel flow as test.json.",
-                ),
-            ]
-            .into_iter()
-            .filter_map(|(id, name, player_count, description)| {
-                build_builtin_rule(id, name, player_count, description, design.clone())
-            }),
-        );
-    }
-
-    if let Some(design) = load_builtin_war_design() {
-        rules.extend(
-            [(
-                "builtin-war-rule",
-                "War 拼点战争",
-                2,
-                "经典战争玩法：每人 5 张手牌，连续 5 轮翻牌比大小，赢得轮数多者胜。",
-            )]
-            .into_iter()
-            .filter_map(|(id, name, player_count, description)| {
-                build_builtin_rule(id, name, player_count, description, design.clone())
-            }),
-        );
-    }
-
     rules
 }
 
-fn load_builtin_test_design() -> Option<ExportedRuleDesign> {
-    let rule_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test.json");
-    let content = std::fs::read_to_string(rule_path).ok()?;
-    serde_json::from_str(&content).ok()
-}
-
-fn load_builtin_test2_design() -> Option<ExportedRuleDesign> {
-    let rule_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test2.json");
-    let content = std::fs::read_to_string(rule_path).ok()?;
-    serde_json::from_str(&content).ok()
-}
-
-fn load_builtin_war_design() -> Option<ExportedRuleDesign> {
-    let rule_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("war.json");
+fn load_builtin_design(filename: &str) -> Option<ExportedRuleDesign> {
+    let rule_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(filename);
     let content = std::fs::read_to_string(rule_path).ok()?;
     serde_json::from_str(&content).ok()
 }
@@ -832,12 +836,10 @@ fn build_builtin_rule(
 }
 
 fn builtin_rule_sort_key(rule_id: &str) -> (u8, &str) {
-    match rule_id {
-        "builtin-test2-rule" => (0, rule_id),
-        "builtin-test-rule" => (1, rule_id),
-        "classic" => (2, rule_id),
-        "party" => (3, rule_id),
-        "builtin-war-rule" => (4, rule_id),
-        _ => (5, rule_id),
-    }
+    let order = BUILTIN_RULES
+        .iter()
+        .position(|spec| spec.id == rule_id)
+        .map(|idx| idx as u8)
+        .unwrap_or(u8::MAX);
+    (order, rule_id)
 }
