@@ -769,6 +769,13 @@ const BUILTIN_RULES: &[BuiltinRuleSpec] = &[
         description: "经典累加玩法：每人 14 张牌，轮流出牌把点数加进桌面总和；让总和超过 99 的玩家输。",
         design_file: "nine_nine.json",
     },
+    BuiltinRuleSpec {
+        id: "builtin-bigtwo-rule",
+        name: "大老二极简版",
+        player_count: 2,
+        description: "简化版大老二：单/对/三 + 炸弹，先出完赢。注意：极简版规则下，双方均无法压制当前牌型时可能进入死锁，建议尝试单张或小对子开局以保留出牌空间。",
+        design_file: "big_two.json",
+    },
 ];
 
 fn build_builtin_rules() -> Vec<PublishedRule> {
