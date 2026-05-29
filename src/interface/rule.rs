@@ -776,6 +776,13 @@ const BUILTIN_RULES: &[BuiltinRuleSpec] = &[
         description: "简化版大老二：单/对/三 + 炸弹，先出完赢。注意：极简版规则下，双方均无法压制当前牌型时可能进入死锁，建议尝试单张或小对子开局以保留出牌空间。",
         design_file: "big_two.json",
     },
+    BuiltinRuleSpec {
+        id: "builtin-blackjack-rule",
+        name: "21 点（伪版）",
+        player_count: 2,
+        description: "伪版 21 点：无要牌/停牌阶段，每方一次性提交 3 张明牌后直接比较结果。A=1，J/Q/K 按字面 11/12/13 算；谁的总和最接近 21 但不超过谁赢，双方均爆或平局判和。",
+        design_file: "blackjack.json",
+    },
 ];
 
 fn build_builtin_rules() -> Vec<PublishedRule> {

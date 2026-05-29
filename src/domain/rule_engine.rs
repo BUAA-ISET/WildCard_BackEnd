@@ -2650,6 +2650,44 @@ fn shuffle_deck(session: &mut GameSession) {
 mod tests {
     use super::*;
 
+    /// 通用工具：清空 session 中所有手牌与牌堆，按 mapping 依据“点数”精确补回
+    /// 给每个 player；剩余牌回到 session.deck，并刷新 player.手牌数。
+    /// 测试需要确定性的手牌组合，不能依赖自然发牌（HashMap 迭代顺序不定）。
+    fn force_hands(session: &mut GameSession, mapping: &[(&str, &[i64])]) {
+        let mut pool: Vec<GameCard> = Vec::new();
+        pool.append(&mut session.deck);
+        for hand in session.hands.values_mut() {
+            pool.append(hand);
+        }
+        pool.append(&mut session.discard_pile);
+
+        fn take_by_point(pool: &mut Vec<GameCard>, point: i64) -> GameCard {
+            let pos = pool
+                .iter()
+                .position(|card| card.properties.get("点数").copied().unwrap_or_default() == point)
+                .unwrap_or_else(|| panic!("pool exhausted for point {point}"));
+            pool.remove(pos)
+        }
+
+        for (player_id, points) in mapping {
+            let hand: Vec<GameCard> = points
+                .iter()
+                .map(|p| take_by_point(&mut pool, *p))
+                .collect();
+            session.hands.insert((*player_id).to_string(), hand);
+        }
+        session.deck = pool;
+
+        for player in &mut session.players {
+            let count = session
+                .hands
+                .get(&player.id)
+                .map(Vec::len)
+                .unwrap_or_default() as i64;
+            player.properties.insert("手牌数".to_string(), count);
+        }
+    }
+
     fn load_tiny_demo_rule() -> RuntimeRule {
         let content = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test2.json"),
@@ -3018,42 +3056,7 @@ mod tests {
     /// 剩下的丢回 session.deck，并刷新 player.手牌数。
     /// 测试需要确定性的手牌组合，不能依赖自然发牌（HashMap 迭代顺序不定）。
     fn force_bigtwo_hands(session: &mut GameSession, a_points: &[i64], b_points: &[i64]) {
-        let mut pool: Vec<GameCard> = Vec::new();
-        pool.append(&mut session.deck);
-        for hand in session.hands.values_mut() {
-            pool.append(hand);
-        }
-        pool.append(&mut session.discard_pile);
-
-        fn take_by_point(pool: &mut Vec<GameCard>, point: i64) -> GameCard {
-            let pos = pool
-                .iter()
-                .position(|card| card.properties.get("点数").copied().unwrap_or_default() == point)
-                .unwrap_or_else(|| panic!("pool exhausted for point {point}"));
-            pool.remove(pos)
-        }
-
-        let a_hand: Vec<GameCard> = a_points
-            .iter()
-            .map(|p| take_by_point(&mut pool, *p))
-            .collect();
-        let b_hand: Vec<GameCard> = b_points
-            .iter()
-            .map(|p| take_by_point(&mut pool, *p))
-            .collect();
-
-        session.hands.insert("player-a".to_string(), a_hand);
-        session.hands.insert("player-b".to_string(), b_hand);
-        session.deck = pool;
-
-        for player in &mut session.players {
-            let count = session
-                .hands
-                .get(&player.id)
-                .map(Vec::len)
-                .unwrap_or_default() as i64;
-            player.properties.insert("手牌数".to_string(), count);
-        }
+        force_hands(session, &[("player-a", a_points), ("player-b", b_points)]);
     }
 
     fn find_hand_card_by_point(
@@ -3524,5 +3527,204 @@ mod tests {
         for c in &last.cards {
             assert_eq!(c.properties.get("点数").copied(), Some(5));
         }
+    }
+
+    fn load_blackjack_rule() -> RuntimeRule {
+        let content = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("blackjack.json"),
+        )
+        .expect("blackjack.json should exist");
+        let design: ExportedRuleDesign =
+            serde_json::from_str(&content).expect("blackjack.json should be valid rule json");
+
+        RuleEngine::parse(
+            "21 点（伪版）".to_string(),
+            2,
+            "伪版 21 点：每人 3 张明牌，直接累加点数".to_string(),
+            design,
+        )
+        .expect("blackjack rule should compile")
+    }
+
+    /// 21 点强行注入手牌；与 force_bigtwo_hands 同构，但目标长度固定为 3。
+    fn force_blackjack_hands(session: &mut GameSession, a_points: &[i64], b_points: &[i64]) {
+        force_hands(session, &[("player-a", a_points), ("player-b", b_points)]);
+    }
+
+    /// 每个玩家把强行注入的 3 张手牌一次性全部亮出（type 21 出牌动作 → 把 3 张
+    /// 推进 last_action_cards，match_flow 的 m_played_sum 据此累加并写入 table 分数）。
+    fn play_all_three(runtime_rule: &RuntimeRule, session: &mut GameSession, player_id: &str) {
+        let pending = session
+            .pending_action
+            .clone()
+            .unwrap_or_else(|| panic!("{player_id} 应有挂起的出牌动作"));
+        assert_eq!(pending.component_type, 21);
+        assert_eq!(pending.player_id, player_id);
+
+        let card_ids: Vec<String> = session
+            .hands
+            .get(player_id)
+            .map(|cards| cards.iter().map(|card| card.id.clone()).collect())
+            .unwrap_or_default();
+        assert_eq!(card_ids.len(), 3, "{player_id} 必须正好持有 3 张牌");
+
+        RuleEngine::submit_action(
+            runtime_rule,
+            session,
+            player_id,
+            PlayerActionInput {
+                cards: card_ids,
+                choice: None,
+            },
+        )
+        .unwrap_or_else(|err| panic!("{player_id} 亮出 3 张失败：{err:?}"));
+    }
+
+    #[test]
+    fn simulate_blackjack_smaller_score_wins_when_neither_bust() {
+        // A = 5+7+8 = 20，B = 3+4+9 = 16，双方都没爆 → A 更接近 21 应赢。
+        let runtime_rule = load_blackjack_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-bj-1".to_string(), &runtime_rule, player_ids)
+                .expect("blackjack session should start");
+
+        // 开局应直接发完 3 张并挂起 player-a 的出牌动作。
+        assert_eq!(session.hands.get("player-a").map(Vec::len), Some(3));
+        assert_eq!(session.hands.get("player-b").map(Vec::len), Some(3));
+
+        force_blackjack_hands(&mut session, &[5, 7, 8], &[3, 4, 9]);
+
+        play_all_three(&runtime_rule, &mut session, "player-a");
+        play_all_three(&runtime_rule, &mut session, "player-b");
+
+        assert_eq!(session.status, "finished", "双方亮牌后应直接进入结算");
+        assert!(session.pending_action.is_none());
+
+        assert_eq!(
+            session.table.get("p0_score").copied(),
+            Some(20),
+            "p0_score 应为 20"
+        );
+        assert_eq!(
+            session.table.get("p1_score").copied(),
+            Some(16),
+            "p1_score 应为 16"
+        );
+        assert_eq!(
+            session.table.get("winner_index").copied(),
+            Some(0),
+            "A 更接近 21 应赢"
+        );
+        assert_eq!(session.settlement_results.get("player-a"), Some(&1));
+        assert_eq!(session.settlement_results.get("player-b"), Some(&0));
+    }
+
+    #[test]
+    fn simulate_blackjack_only_non_bust_wins() {
+        // A = 10+10+5 = 25（爆），B = 3+4+5 = 12（不爆）→ B 应赢。
+        let runtime_rule = load_blackjack_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-bj-2".to_string(), &runtime_rule, player_ids)
+                .expect("blackjack session should start");
+
+        force_blackjack_hands(&mut session, &[10, 10, 5], &[3, 4, 5]);
+
+        play_all_three(&runtime_rule, &mut session, "player-a");
+        play_all_three(&runtime_rule, &mut session, "player-b");
+
+        assert_eq!(session.status, "finished");
+        assert!(session.pending_action.is_none());
+
+        assert_eq!(
+            session.table.get("p0_score").copied(),
+            Some(25),
+            "p0_score 应为 25（爆牌）"
+        );
+        assert_eq!(
+            session.table.get("p1_score").copied(),
+            Some(12),
+            "p1_score 应为 12"
+        );
+        assert_eq!(
+            session.table.get("winner_index").copied(),
+            Some(1),
+            "B 没爆 A 爆，B 应赢"
+        );
+        assert_eq!(session.settlement_results.get("player-a"), Some(&0));
+        assert_eq!(session.settlement_results.get("player-b"), Some(&1));
+    }
+
+    #[test]
+    fn simulate_blackjack_both_bust_no_winner() {
+        // A = 10+10+5 = 25（爆），B = 13+13+13 = 39（爆）→ 双方都爆判和。
+        let runtime_rule = load_blackjack_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-bj-3".to_string(), &runtime_rule, player_ids)
+                .expect("blackjack session should start");
+
+        force_blackjack_hands(&mut session, &[10, 10, 5], &[13, 13, 13]);
+
+        play_all_three(&runtime_rule, &mut session, "player-a");
+        play_all_three(&runtime_rule, &mut session, "player-b");
+
+        assert_eq!(session.status, "finished", "双方亮牌后应进入结算");
+        assert!(session.pending_action.is_none());
+
+        assert_eq!(
+            session.table.get("p0_score").copied(),
+            Some(25),
+            "p0_score 应为 25（爆牌）"
+        );
+        assert_eq!(
+            session.table.get("p1_score").copied(),
+            Some(39),
+            "p1_score 应为 39（爆牌）"
+        );
+        assert_eq!(
+            session.table.get("winner_index").copied(),
+            Some(-1),
+            "双方都爆 winner_index 应为 -1"
+        );
+        assert_eq!(session.settlement_results.get("player-a"), Some(&0));
+        assert_eq!(session.settlement_results.get("player-b"), Some(&0));
+    }
+
+    #[test]
+    fn simulate_blackjack_tie_score_no_winner() {
+        // A = 5+5+5 = 15，B = 3+6+6 = 15，两边都没爆且同分 → 平局判和。
+        let runtime_rule = load_blackjack_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-bj-4".to_string(), &runtime_rule, player_ids)
+                .expect("blackjack session should start");
+
+        force_blackjack_hands(&mut session, &[5, 5, 5], &[3, 6, 6]);
+
+        play_all_three(&runtime_rule, &mut session, "player-a");
+        play_all_three(&runtime_rule, &mut session, "player-b");
+
+        assert_eq!(session.status, "finished", "双方亮牌后应进入结算");
+        assert!(session.pending_action.is_none());
+
+        assert_eq!(
+            session.table.get("p0_score").copied(),
+            Some(15),
+            "p0_score 应为 15"
+        );
+        assert_eq!(
+            session.table.get("p1_score").copied(),
+            Some(15),
+            "p1_score 应为 15"
+        );
+        assert_eq!(
+            session.table.get("winner_index").copied(),
+            Some(-1),
+            "同分时 winner_index 应为 -1"
+        );
+        assert_eq!(session.settlement_results.get("player-a"), Some(&0));
+        assert_eq!(session.settlement_results.get("player-b"), Some(&0));
     }
 }
