@@ -2879,4 +2879,121 @@ mod tests {
             }
         }
     }
+
+    fn load_nine_nine_rule() -> RuntimeRule {
+        let content = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nine_nine.json"),
+        )
+        .expect("nine_nine.json should exist");
+        let design: ExportedRuleDesign =
+            serde_json::from_str(&content).expect("nine_nine.json should be valid rule json");
+
+        RuleEngine::parse(
+            "99 累加".to_string(),
+            2,
+            "出牌累加，超过 99 即输".to_string(),
+            design,
+        )
+        .expect("nine_nine rule should compile")
+    }
+
+    #[test]
+    fn simulate_99_full_match_overflow_loss() {
+        // 自然出牌（永远出 hand[0]）下，14 张手牌×2 人 = 28 张实际出牌，
+        // 这 28 张牌的点数之和的下界是 220-(40-28 张里最大点数和) = 220-108 = 112，
+        // 所以无论牌堆顺序如何，14 轮内一定会有某一刻 table.total > 99 触发 overflow。
+        let runtime_rule = load_nine_nine_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session = RuleEngine::start_session(
+            "room-99-overflow".to_string(),
+            &runtime_rule,
+            player_ids.clone(),
+        )
+        .expect("99 session should start");
+
+        assert_eq!(session.hands.get("player-a").map(Vec::len), Some(14));
+        assert_eq!(session.hands.get("player-b").map(Vec::len), Some(14));
+
+        let pending = session
+            .pending_action
+            .clone()
+            .expect("expected player A pending action at start");
+        assert_eq!(pending.component_type, 21);
+        assert_eq!(pending.player_id, "player-a");
+
+        let mut expected_p0_total: i64 = 0;
+        let mut expected_p1_total: i64 = 0;
+        let mut last_player: Option<String> = None;
+        let mut plays = 0usize;
+
+        // 最多 28 张实际出牌；理论 14 轮一定 overflow，留些余量防止死循环。
+        while session.status != "finished" && plays < 40 {
+            let pending = session
+                .pending_action
+                .clone()
+                .unwrap_or_else(|| panic!("play {plays}: expected a pending action"));
+            assert_eq!(pending.component_type, 21);
+
+            let player_id = pending.player_id.clone();
+            let card_id = pick_card_id(&session, &player_id, 0);
+            let point = card_point(&session, &player_id, &card_id);
+            assert!(point >= 1, "card 点数 should be at least 1");
+
+            if player_id == "player-a" {
+                expected_p0_total += point;
+            } else {
+                expected_p1_total += point;
+            }
+            last_player = Some(player_id.clone());
+
+            RuleEngine::submit_action(
+                &runtime_rule,
+                &mut session,
+                &player_id,
+                PlayerActionInput {
+                    cards: vec![card_id],
+                    choice: None,
+                },
+            )
+            .unwrap_or_else(|err| panic!("play {plays}: {player_id} play failed: {err:?}"));
+            plays += 1;
+        }
+
+        // 触发 overflow 后局应直接进入结算。
+        assert_eq!(
+            session.status, "finished",
+            "session should finish via overflow within {plays} natural plays"
+        );
+        assert!(session.pending_action.is_none());
+
+        let total = session.table.get("total").copied().unwrap_or_default();
+        assert!(total > 99, "table.total {total} should exceed 99");
+        assert_eq!(
+            total,
+            expected_p0_total + expected_p1_total,
+            "table.total should match sum of all naturally played points"
+        );
+
+        let overflow_idx = session
+            .table
+            .get("overflow_player_index")
+            .copied()
+            .unwrap_or_default();
+        let last_player =
+            last_player.expect("at least one card should have been played before overflow");
+        let expected_overflow_idx = if last_player == "player-a" { 0 } else { 1 };
+        assert_eq!(
+            overflow_idx, expected_overflow_idx,
+            "the player who pushed total past 99 should be marked as overflow loser"
+        );
+
+        // 输家拿 0，赢家拿 1。
+        let (loser, winner) = if expected_overflow_idx == 0 {
+            ("player-a", "player-b")
+        } else {
+            ("player-b", "player-a")
+        };
+        assert_eq!(session.settlement_results.get(loser), Some(&0));
+        assert_eq!(session.settlement_results.get(winner), Some(&1));
+    }
 }
