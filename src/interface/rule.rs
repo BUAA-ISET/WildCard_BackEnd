@@ -765,6 +765,21 @@ fn build_builtin_rules() -> Vec<PublishedRule> {
         );
     }
 
+    if let Some(design) = load_builtin_war_design() {
+        rules.extend(
+            [(
+                "builtin-war-rule",
+                "War 拼点战争",
+                2,
+                "经典战争玩法：每人 5 张手牌，连续 5 轮翻牌比大小，赢得轮数多者胜。",
+            )]
+            .into_iter()
+            .filter_map(|(id, name, player_count, description)| {
+                build_builtin_rule(id, name, player_count, description, design.clone())
+            }),
+        );
+    }
+
     rules
 }
 
@@ -776,6 +791,12 @@ fn load_builtin_test_design() -> Option<ExportedRuleDesign> {
 
 fn load_builtin_test2_design() -> Option<ExportedRuleDesign> {
     let rule_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test2.json");
+    let content = std::fs::read_to_string(rule_path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn load_builtin_war_design() -> Option<ExportedRuleDesign> {
+    let rule_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("war.json");
     let content = std::fs::read_to_string(rule_path).ok()?;
     serde_json::from_str(&content).ok()
 }
@@ -816,6 +837,7 @@ fn builtin_rule_sort_key(rule_id: &str) -> (u8, &str) {
         "builtin-test-rule" => (1, rule_id),
         "classic" => (2, rule_id),
         "party" => (3, rule_id),
-        _ => (4, rule_id),
+        "builtin-war-rule" => (4, rule_id),
+        _ => (5, rule_id),
     }
 }
