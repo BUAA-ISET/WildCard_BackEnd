@@ -2755,6 +2755,9 @@ mod tests {
         assert_eq!(session.hands.get("player-a").map(Vec::len), Some(5));
         assert_eq!(session.hands.get("player-b").map(Vec::len), Some(5));
 
+        let mut expected_p0_wins: i64 = 0;
+        let mut expected_p1_wins: i64 = 0;
+
         for round in 0..5 {
             // 轮到玩家 A 出牌。
             let pending = session
@@ -2803,7 +2806,13 @@ mod tests {
             )
             .unwrap_or_else(|err| panic!("round {round}: player B play failed: {err:?}"));
 
-            // 比对后引擎应该按比较结果累加 round_wins。
+            // 强不变量：每轮 round_wins 的精确增量必须与点数比较一致。
+            match p0_point.cmp(&p1_point) {
+                std::cmp::Ordering::Greater => expected_p0_wins += 1,
+                std::cmp::Ordering::Less => expected_p1_wins += 1,
+                std::cmp::Ordering::Equal => {}
+            }
+
             let p0_wins = session
                 .players
                 .iter()
@@ -2816,24 +2825,14 @@ mod tests {
                 .find(|player| player.id == "player-b")
                 .and_then(|player| player.properties.get("round_wins").copied())
                 .unwrap_or_default();
-
-            match p0_point.cmp(&p1_point) {
-                std::cmp::Ordering::Greater => {
-                    assert!(
-                        p0_wins >= 1,
-                        "round {round}: player A point {p0_point} > {p1_point} should add a win"
-                    );
-                }
-                std::cmp::Ordering::Less => {
-                    assert!(
-                        p1_wins >= 1,
-                        "round {round}: player B point {p1_point} > {p0_point} should add a win"
-                    );
-                }
-                std::cmp::Ordering::Equal => {
-                    // 平局两侧都不加分。
-                }
-            }
+            assert_eq!(
+                p0_wins, expected_p0_wins,
+                "round {round}: player A round_wins drift after p0={p0_point} p1={p1_point}"
+            );
+            assert_eq!(
+                p1_wins, expected_p1_wins,
+                "round {round}: player B round_wins drift after p0={p0_point} p1={p1_point}"
+            );
         }
 
         // 五轮跑完后应进入结算并产出胜者（除非完全平局）。
