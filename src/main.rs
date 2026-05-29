@@ -157,6 +157,10 @@ async fn main() {
             get(market::list_rooms_for_rule),
         )
         .route(
+            "/api/rules/published/{rule_id}/reviews",
+            post(market::create_review),
+        )
+        .route(
             "/api/rules/developers/{developer_id}/rules",
             get(market::list_developer_rules),
         )

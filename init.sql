@@ -42,3 +42,18 @@ CREATE TABLE IF NOT EXISTS rule_published (
 
 CREATE INDEX IF NOT EXISTS idx_rule_published_owner_updated
     ON rule_published(owner_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS rule_reviews (
+    id UUID PRIMARY KEY,
+    rule_id UUID NOT NULL,
+    author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    rating SMALLINT NOT NULL CHECK (rating >= 1 AND rating <= 5),
+    content TEXT NOT NULL DEFAULT '',
+    image_url VARCHAR(512),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (rule_id, author_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rule_reviews_rule_created
+    ON rule_reviews(rule_id, created_at DESC);
