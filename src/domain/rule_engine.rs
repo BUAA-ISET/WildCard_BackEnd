@@ -2707,4 +2707,177 @@ mod tests {
         assert_eq!(session.settlement_results.get("player-a"), Some(&1));
         assert_eq!(session.settlement_results.get("player-b"), Some(&0));
     }
+
+    fn load_war_rule() -> RuntimeRule {
+        let content = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("war.json"),
+        )
+        .expect("war.json should exist");
+        let design: ExportedRuleDesign =
+            serde_json::from_str(&content).expect("war.json should be valid rule json");
+
+        RuleEngine::parse(
+            "War 拼点战争".to_string(),
+            2,
+            "5 轮翻牌比大小".to_string(),
+            design,
+        )
+        .expect("war rule should compile")
+    }
+
+    fn pick_card_id(session: &GameSession, player_id: &str, hand_index: usize) -> String {
+        session
+            .hands
+            .get(player_id)
+            .and_then(|cards| cards.get(hand_index))
+            .map(|card| card.id.clone())
+            .unwrap_or_else(|| panic!("player {player_id} should have card at index {hand_index}"))
+    }
+
+    fn card_point(session: &GameSession, player_id: &str, card_id: &str) -> i64 {
+        session
+            .hands
+            .get(player_id)
+            .and_then(|cards| cards.iter().find(|card| card.id == card_id))
+            .and_then(|card| card.properties.get("点数").copied())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn simulate_war_full_match() {
+        let runtime_rule = load_war_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-war".to_string(), &runtime_rule, player_ids.clone())
+                .expect("war session should start");
+
+        // 每人开局发到 5 张牌。
+        assert_eq!(session.hands.get("player-a").map(Vec::len), Some(5));
+        assert_eq!(session.hands.get("player-b").map(Vec::len), Some(5));
+
+        for round in 0..5 {
+            // 轮到玩家 A 出牌。
+            let pending = session
+                .pending_action
+                .clone()
+                .unwrap_or_else(|| panic!("round {round}: expected player A pending action"));
+            assert_eq!(pending.component_type, 21);
+            assert_eq!(
+                pending.player_id, "player-a",
+                "round {round}: player A should act first"
+            );
+
+            let p0_card_id = pick_card_id(&session, "player-a", 0);
+            let p0_point = card_point(&session, "player-a", &p0_card_id);
+            RuleEngine::submit_action(
+                &runtime_rule,
+                &mut session,
+                "player-a",
+                PlayerActionInput {
+                    cards: vec![p0_card_id],
+                    choice: None,
+                },
+            )
+            .unwrap_or_else(|err| panic!("round {round}: player A play failed: {err:?}"));
+
+            // 轮到玩家 B 出牌。
+            let pending = session
+                .pending_action
+                .clone()
+                .unwrap_or_else(|| panic!("round {round}: expected player B pending action"));
+            assert_eq!(
+                pending.player_id, "player-b",
+                "round {round}: player B should act second"
+            );
+
+            let p1_card_id = pick_card_id(&session, "player-b", 0);
+            let p1_point = card_point(&session, "player-b", &p1_card_id);
+            RuleEngine::submit_action(
+                &runtime_rule,
+                &mut session,
+                "player-b",
+                PlayerActionInput {
+                    cards: vec![p1_card_id],
+                    choice: None,
+                },
+            )
+            .unwrap_or_else(|err| panic!("round {round}: player B play failed: {err:?}"));
+
+            // 比对后引擎应该按比较结果累加 round_wins。
+            let p0_wins = session
+                .players
+                .iter()
+                .find(|player| player.id == "player-a")
+                .and_then(|player| player.properties.get("round_wins").copied())
+                .unwrap_or_default();
+            let p1_wins = session
+                .players
+                .iter()
+                .find(|player| player.id == "player-b")
+                .and_then(|player| player.properties.get("round_wins").copied())
+                .unwrap_or_default();
+
+            match p0_point.cmp(&p1_point) {
+                std::cmp::Ordering::Greater => {
+                    assert!(
+                        p0_wins >= 1,
+                        "round {round}: player A point {p0_point} > {p1_point} should add a win"
+                    );
+                }
+                std::cmp::Ordering::Less => {
+                    assert!(
+                        p1_wins >= 1,
+                        "round {round}: player B point {p1_point} > {p0_point} should add a win"
+                    );
+                }
+                std::cmp::Ordering::Equal => {
+                    // 平局两侧都不加分。
+                }
+            }
+        }
+
+        // 五轮跑完后应进入结算并产出胜者（除非完全平局）。
+        assert_eq!(session.status, "finished", "session should be finished");
+        assert!(session.pending_action.is_none());
+        assert_eq!(session.discard_pile.len(), 10);
+
+        let p0_result = session
+            .settlement_results
+            .get("player-a")
+            .copied()
+            .unwrap_or_default();
+        let p1_result = session
+            .settlement_results
+            .get("player-b")
+            .copied()
+            .unwrap_or_default();
+        let p0_wins = session
+            .players
+            .iter()
+            .find(|player| player.id == "player-a")
+            .and_then(|player| player.properties.get("round_wins").copied())
+            .unwrap_or_default();
+        let p1_wins = session
+            .players
+            .iter()
+            .find(|player| player.id == "player-b")
+            .and_then(|player| player.properties.get("round_wins").copied())
+            .unwrap_or_default();
+
+        match p0_wins.cmp(&p1_wins) {
+            std::cmp::Ordering::Greater => {
+                assert_eq!(p0_result, 1, "player A wins more rounds, should win match");
+                assert_eq!(p1_result, 0);
+            }
+            std::cmp::Ordering::Less => {
+                assert_eq!(p1_result, 1, "player B wins more rounds, should win match");
+                assert_eq!(p0_result, 0);
+            }
+            std::cmp::Ordering::Equal => {
+                // 局合：双方 round_wins 相同时 winner_index 设为 -1，两侧 result=0。
+                assert_eq!(p0_result, 0);
+                assert_eq!(p1_result, 0);
+            }
+        }
+    }
 }
