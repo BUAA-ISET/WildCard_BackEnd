@@ -178,7 +178,7 @@ pub async fn save_draft(
 
     let now = now_millis();
     let draft = RuleDraft {
-        id: format!("rule_draft_{}", uuid::Uuid::new_v4()),
+        id: uuid::Uuid::new_v4().to_string(),
         owner_id: user_id.to_string(),
         name: payload.name,
         player_count: payload.player_count,
@@ -364,7 +364,7 @@ impl RulePersistence {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS rule_drafts (
-                id VARCHAR(128) PRIMARY KEY,
+                id UUID PRIMARY KEY,
                 owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 name VARCHAR(255) NOT NULL,
                 player_count SMALLINT NOT NULL,
@@ -372,8 +372,8 @@ impl RulePersistence {
                 status VARCHAR(32) NOT NULL DEFAULT 'draft',
                 design JSONB NOT NULL,
                 published_rule_id VARCHAR(128),
-                created_at BIGINT NOT NULL,
-                updated_at BIGINT NOT NULL
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             "#,
         )
@@ -394,16 +394,16 @@ impl RulePersistence {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS rule_published (
-                id VARCHAR(128) PRIMARY KEY,
-                draft_id VARCHAR(128) REFERENCES rule_drafts(id) ON DELETE SET NULL,
+                id UUID PRIMARY KEY,
+                draft_id UUID REFERENCES rule_drafts(id) ON DELETE SET NULL,
                 owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 name VARCHAR(255) NOT NULL,
                 player_count SMALLINT NOT NULL,
                 description TEXT NOT NULL DEFAULT '',
                 version INTEGER NOT NULL DEFAULT 1,
                 design JSONB NOT NULL,
-                created_at BIGINT NOT NULL,
-                updated_at BIGINT NOT NULL
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             "#,
         )
@@ -427,8 +427,17 @@ impl RulePersistence {
     pub async fn load_into(&self, repository: &mut RuleRepository) -> Result<(), AppError> {
         let draft_rows = sqlx::query(
             r#"
-            SELECT id, owner_id, name, player_count, description, status, design,
-                   published_rule_id, created_at, updated_at
+            SELECT
+                id::text AS id,
+                owner_id,
+                name,
+                player_count,
+                description,
+                status,
+                design,
+                published_rule_id,
+                (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_at,
+                (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_at
             FROM rule_drafts
             "#,
         )
@@ -462,8 +471,16 @@ impl RulePersistence {
 
         let published_rows = sqlx::query(
             r#"
-            SELECT id, owner_id, name, player_count, description, version, design,
-                   created_at, updated_at
+            SELECT
+                id::text AS id,
+                owner_id,
+                name,
+                player_count,
+                description,
+                version,
+                design,
+                (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_at,
+                (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_at
             FROM rule_published
             "#,
         )
@@ -484,8 +501,11 @@ impl RulePersistence {
                 description.clone(),
                 design.clone(),
             )?;
+            // 历史数据里 rule_published.id 存纯 UUID，但内存 / API 用 "rule_<uuid>" 前缀，
+            // 与 rule_drafts.published_rule_id 字面值对齐。
+            let id_raw: String = row.get("id");
             let published_rule = PublishedRule {
-                id: row.get("id"),
+                id: format!("rule_{id_raw}"),
                 owner_id: row.get::<Uuid, _>("owner_id").to_string(),
                 name,
                 player_count,
@@ -508,6 +528,8 @@ impl RulePersistence {
         let design = serde_json::to_value(&draft.design).map_err(AppError::JsonError)?;
         let owner_id = Uuid::parse_str(&draft.owner_id)
             .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效：{e}")))?;
+        let draft_uuid = Uuid::parse_str(&draft.id)
+            .map_err(|e| AppError::InvalidInput(format!("草稿 ID 必须是 UUID：{e}")))?;
         let status = match draft.status {
             RuleStatus::Draft => "draft",
             RuleStatus::Published => "published",
@@ -519,7 +541,11 @@ impl RulePersistence {
                 id, owner_id, name, player_count, description, status, design,
                 published_rule_id, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8,
+                to_timestamp($9::double precision / 1000.0),
+                to_timestamp($10::double precision / 1000.0)
+            )
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 player_count = EXCLUDED.player_count,
@@ -530,7 +556,7 @@ impl RulePersistence {
                 updated_at = EXCLUDED.updated_at
             "#,
         )
-        .bind(&draft.id)
+        .bind(draft_uuid)
         .bind(owner_id)
         .bind(&draft.name)
         .bind(draft.player_count as i16)
@@ -555,6 +581,13 @@ impl RulePersistence {
         let design = serde_json::to_value(&rule.design).map_err(AppError::JsonError)?;
         let owner_id = Uuid::parse_str(&rule.owner_id)
             .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效：{e}")))?;
+        // 内存 / API 用 "rule_<uuid>" 前缀，落库时剥掉只留 UUID。
+        let rule_uuid_str = rule.id.strip_prefix("rule_").unwrap_or(&rule.id);
+        let rule_uuid = Uuid::parse_str(rule_uuid_str).map_err(|e| {
+            AppError::InvalidInput(format!("已发布规则 ID 必须是 UUID（含 rule_ 前缀）：{e}"))
+        })?;
+        let draft_uuid = Uuid::parse_str(draft_id)
+            .map_err(|e| AppError::InvalidInput(format!("草稿 ID 必须是 UUID：{e}")))?;
 
         sqlx::query(
             r#"
@@ -562,7 +595,11 @@ impl RulePersistence {
                 id, draft_id, owner_id, name, player_count, description, version,
                 design, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8,
+                to_timestamp($9::double precision / 1000.0),
+                to_timestamp($10::double precision / 1000.0)
+            )
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 player_count = EXCLUDED.player_count,
@@ -572,8 +609,8 @@ impl RulePersistence {
                 updated_at = EXCLUDED.updated_at
             "#,
         )
-        .bind(&rule.id)
-        .bind(draft_id)
+        .bind(rule_uuid)
+        .bind(draft_uuid)
         .bind(owner_id)
         .bind(&rule.name)
         .bind(rule.player_count as i16)
@@ -592,6 +629,8 @@ impl RulePersistence {
     pub async fn delete_draft(&self, draft_id: &str, owner_id: &str) -> Result<(), AppError> {
         let owner_id = Uuid::parse_str(owner_id)
             .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效：{e}")))?;
+        let draft_uuid = Uuid::parse_str(draft_id)
+            .map_err(|e| AppError::InvalidInput(format!("草稿 ID 必须是 UUID：{e}")))?;
 
         sqlx::query(
             r#"
@@ -599,7 +638,7 @@ impl RulePersistence {
             WHERE draft_id = $1 AND owner_id = $2
             "#,
         )
-        .bind(draft_id)
+        .bind(draft_uuid)
         .bind(owner_id)
         .execute(&self.pool)
         .await
@@ -611,7 +650,7 @@ impl RulePersistence {
             WHERE id = $1 AND owner_id = $2
             "#,
         )
-        .bind(draft_id)
+        .bind(draft_uuid)
         .bind(owner_id)
         .execute(&self.pool)
         .await
