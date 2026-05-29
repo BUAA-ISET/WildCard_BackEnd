@@ -5,7 +5,7 @@ mod interface;
 mod state;
 
 use crate::infrastructure::user::UserRepository;
-use crate::interface::{room, rule, user};
+use crate::interface::{market, room, rule, user};
 use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
@@ -146,6 +146,19 @@ async fn main() {
         .route(
             "/api/rules/drafts/{draft_id}/publish",
             post(rule::publish_draft),
+        )
+        .route("/api/rules/published", get(market::list_published_rules))
+        .route(
+            "/api/rules/published/{rule_id}",
+            get(market::get_published_rule_detail),
+        )
+        .route(
+            "/api/rules/published/{rule_id}/rooms",
+            get(market::list_rooms_for_rule),
+        )
+        .route(
+            "/api/rules/developers/{developer_id}/rules",
+            get(market::list_developer_rules),
         )
         .route("/api/room/rules", get(rule::rule_options))
         .route("/api/room/create", post(room::create_room))
