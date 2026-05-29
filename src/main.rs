@@ -5,7 +5,7 @@ mod interface;
 mod state;
 
 use crate::infrastructure::user::UserRepository;
-use crate::interface::{room, rule, user};
+use crate::interface::{replay, room, rule, user};
 use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
@@ -82,6 +82,7 @@ async fn main() {
             .await
             .expect("Failed to initialize rule store"),
         rooms: room::build_room_store(),
+        replays: replay::build_replay_store(),
         email: crate::infrastructure::email::EmailSender::from_env(),
         upload_dir: crate::state::UploadDir::from_env(),
     };
@@ -158,6 +159,8 @@ async fn main() {
         .route("/api/room/rule/get", get(room::get_room_rule))
         .route("/api/games/current", get(room::current_game))
         .route("/api/games/{sessionId}", get(room::get_game))
+        .route("/api/replays/history", get(replay::list_history))
+        .route("/api/replays/{replayId}", get(replay::get_replay))
         .route(
             "/api/games/{sessionId}/actions/{actionId}/play-cards",
             post(room::play_cards),
