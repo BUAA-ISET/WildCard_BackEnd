@@ -24,12 +24,18 @@ CREATE TABLE IF NOT EXISTS rule_drafts (
     published_rule_id VARCHAR(128),
     forked_from_rule_id VARCHAR(128),
     reject_reason TEXT,
+    introduction TEXT NOT NULL DEFAULT '',
+    cover_url VARCHAR(512) NOT NULL DEFAULT '',
+    screenshot_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 ALTER TABLE rule_drafts ADD COLUMN IF NOT EXISTS forked_from_rule_id VARCHAR(128);
 ALTER TABLE rule_drafts ADD COLUMN IF NOT EXISTS reject_reason TEXT;
+ALTER TABLE rule_drafts ADD COLUMN IF NOT EXISTS introduction TEXT NOT NULL DEFAULT '';
+ALTER TABLE rule_drafts ADD COLUMN IF NOT EXISTS cover_url VARCHAR(512) NOT NULL DEFAULT '';
+ALTER TABLE rule_drafts ADD COLUMN IF NOT EXISTS screenshot_urls JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_rule_drafts_owner_updated
     ON rule_drafts(owner_id, updated_at DESC);
@@ -43,9 +49,16 @@ CREATE TABLE IF NOT EXISTS rule_published (
     description TEXT NOT NULL DEFAULT '',
     version INTEGER NOT NULL DEFAULT 1,
     design JSONB NOT NULL,
+    introduction TEXT NOT NULL DEFAULT '',
+    cover_url VARCHAR(512) NOT NULL DEFAULT '',
+    screenshot_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE rule_published ADD COLUMN IF NOT EXISTS introduction TEXT NOT NULL DEFAULT '';
+ALTER TABLE rule_published ADD COLUMN IF NOT EXISTS cover_url VARCHAR(512) NOT NULL DEFAULT '';
+ALTER TABLE rule_published ADD COLUMN IF NOT EXISTS screenshot_urls JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_rule_published_owner_updated
     ON rule_published(owner_id, updated_at DESC);

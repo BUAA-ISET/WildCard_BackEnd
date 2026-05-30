@@ -152,6 +152,10 @@ async fn main() {
             "/api/rules/drafts/{draft_id}/submit-review",
             post(rule::submit_review),
         )
+        .route(
+            "/api/rules/drafts/{draft_id}/images",
+            post(rule::upload_rule_image),
+        )
         .route("/api/admin/rules/pending", get(rule::list_pending_reviews))
         .route(
             "/api/admin/rules/{draft_id}/approve",

@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Multipart, Path, State},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
@@ -17,7 +17,8 @@ use crate::{
     error::AppError,
     infrastructure::user::UserRepository,
     interface::auth::TokenClaims,
-    state::RuleStore,
+    interface::user::extension_for_mime,
+    state::{RuleStore, UploadDir},
 };
 
 #[derive(Debug, Serialize)]
@@ -47,6 +48,12 @@ pub struct SaveRuleDraftRequest {
     #[serde(default)]
     pub description: String,
     pub design: ExportedRuleDesign,
+    #[serde(default)]
+    pub introduction: String,
+    #[serde(default, rename = "coverUrl")]
+    pub cover_url: String,
+    #[serde(default, rename = "screenshotUrls")]
+    pub screenshot_urls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,6 +76,12 @@ pub struct RuleDraft {
     pub forked_from_rule_id: Option<String>,
     #[serde(rename = "rejectReason", skip_serializing_if = "Option::is_none")]
     pub reject_reason: Option<String>,
+    #[serde(default)]
+    pub introduction: String,
+    #[serde(default, rename = "coverUrl")]
+    pub cover_url: String,
+    #[serde(default, rename = "screenshotUrls")]
+    pub screenshot_urls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +136,12 @@ pub struct PublishedRule {
     pub created_at: i64,
     #[serde(rename = "updatedAt")]
     pub updated_at: i64,
+    #[serde(default)]
+    pub introduction: String,
+    #[serde(default, rename = "coverUrl")]
+    pub cover_url: String,
+    #[serde(default, rename = "screenshotUrls")]
+    pub screenshot_urls: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -175,6 +194,12 @@ pub struct RuleDraftSummary {
     pub published_rule_id: Option<String>,
     #[serde(rename = "rejectReason", skip_serializing_if = "Option::is_none")]
     pub reject_reason: Option<String>,
+    #[serde(default)]
+    pub introduction: String,
+    #[serde(default, rename = "coverUrl")]
+    pub cover_url: String,
+    #[serde(default, rename = "screenshotUrls")]
+    pub screenshot_urls: Vec<String>,
 }
 
 pub async fn list_drafts(
@@ -195,6 +220,9 @@ pub async fn list_drafts(
             updated_at: draft.updated_at,
             published_rule_id: draft.published_rule_id.clone(),
             reject_reason: draft.reject_reason.clone(),
+            introduction: draft.introduction.clone(),
+            cover_url: draft.cover_url.clone(),
+            screenshot_urls: draft.screenshot_urls.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -215,6 +243,8 @@ pub async fn save_draft(
         payload.description.clone(),
         payload.design.clone(),
     )?;
+    validate_cover_url(&payload.cover_url)?;
+    validate_screenshot_urls(&payload.screenshot_urls)?;
 
     let now = now_millis();
     let draft = RuleDraft {
@@ -230,6 +260,9 @@ pub async fn save_draft(
         published_rule_id: None,
         forked_from_rule_id: None,
         reject_reason: None,
+        introduction: payload.introduction,
+        cover_url: payload.cover_url,
+        screenshot_urls: payload.screenshot_urls,
     };
     let response = SaveDraftResponse {
         id: draft.id.clone(),
@@ -256,6 +289,8 @@ pub async fn update_draft(
         payload.design.clone(),
     )?;
     drop(runtime);
+    validate_cover_url(&payload.cover_url)?;
+    validate_screenshot_urls(&payload.screenshot_urls)?;
 
     let now = now_millis();
     let mut guard = store.write().await;
@@ -266,6 +301,9 @@ pub async fn update_draft(
     draft.player_count = payload.player_count;
     draft.description = payload.description;
     draft.design = payload.design;
+    draft.introduction = payload.introduction;
+    draft.cover_url = payload.cover_url;
+    draft.screenshot_urls = payload.screenshot_urls;
     // 编辑动作把任何非草稿状态（pending_review / rejected / published）都拉回 Draft，
     // 强制走"重新提审"的路径，避免市场上线版本被原地改掉或绕过审核。
     if draft.status != RuleStatus::Draft {
@@ -313,6 +351,9 @@ pub async fn delete_draft(
         updated_at: draft.updated_at,
         published_rule_id: draft.published_rule_id.clone(),
         reject_reason: draft.reject_reason.clone(),
+        introduction: draft.introduction.clone(),
+        cover_url: draft.cover_url.clone(),
+        screenshot_urls: draft.screenshot_urls.clone(),
     };
     let published_rule_id = draft.published_rule_id.clone();
 
@@ -391,6 +432,58 @@ pub struct RejectDraftRequest {
 }
 
 const REJECT_REASON_MAX_LEN: usize = 512;
+
+const COVER_URL_MAX_LEN: usize = 512;
+const SCREENSHOT_URL_MAX_LEN: usize = 512;
+const SCREENSHOT_MAX_COUNT: usize = 10;
+
+/// 校验封面短 URL：空字符串允许（作者没传），否则必须是 `/static/` 或 http(s):// 开头且 ≤512 字符。
+/// 抽出来方便单测，跟 review.image_url 同样的口径。
+pub fn validate_cover_url(url: &str) -> Result<(), AppError> {
+    if url.is_empty() {
+        return Ok(());
+    }
+    if url.len() > COVER_URL_MAX_LEN {
+        return Err(AppError::InvalidInput(format!(
+            "封面图地址长度不能超过 {COVER_URL_MAX_LEN} 字符"
+        )));
+    }
+    if !is_acceptable_image_url(url) {
+        return Err(AppError::InvalidInput(
+            "封面图地址必须以 /static/、http:// 或 https:// 开头".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// 校验截图短 URL 数组：≤10 个；每个非空、≤512 字符、且以 `/static/` 或 http(s):// 开头。
+pub fn validate_screenshot_urls(urls: &[String]) -> Result<(), AppError> {
+    if urls.len() > SCREENSHOT_MAX_COUNT {
+        return Err(AppError::InvalidInput(format!(
+            "截图最多 {SCREENSHOT_MAX_COUNT} 张"
+        )));
+    }
+    for url in urls {
+        if url.is_empty() {
+            return Err(AppError::InvalidInput("截图地址不能为空字符串".to_string()));
+        }
+        if url.len() > SCREENSHOT_URL_MAX_LEN {
+            return Err(AppError::InvalidInput(format!(
+                "截图地址长度不能超过 {SCREENSHOT_URL_MAX_LEN} 字符"
+            )));
+        }
+        if !is_acceptable_image_url(url) {
+            return Err(AppError::InvalidInput(
+                "截图地址必须以 /static/、http:// 或 https:// 开头".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_acceptable_image_url(url: &str) -> bool {
+    url.starts_with("/static/") || url.starts_with("http://") || url.starts_with("https://")
+}
 
 /// 校验驳回理由：trim 后非空，长度上限 512 字。
 /// 抽出来方便单测覆盖（审核员手动写理由是高频出错点）。
@@ -539,6 +632,9 @@ pub async fn approve_draft(
         runtime,
         created_at: now,
         updated_at: now,
+        introduction: draft.introduction.clone(),
+        cover_url: draft.cover_url.clone(),
+        screenshot_urls: draft.screenshot_urls.clone(),
     };
 
     persistence.save_draft(draft).await?;
@@ -631,6 +727,10 @@ pub fn build_forked_draft(rule: &PublishedRule, user_id: &Uuid, name: String) ->
         published_rule_id: None,
         forked_from_rule_id: Some(rule.id.clone()),
         reject_reason: None,
+        // fork 出来的副本继承元信息：作者大概率想接着改而不是从头写。
+        introduction: rule.introduction.clone(),
+        cover_url: rule.cover_url.clone(),
+        screenshot_urls: rule.screenshot_urls.clone(),
     }
 }
 
@@ -665,6 +765,74 @@ pub async fn fork_published_rule(
     store.write().await.drafts.insert(draft.id.clone(), draft);
 
     Ok(Json(ApiResponse::success(response)))
+}
+
+const RULE_IMAGE_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadedRuleImageResponse {
+    pub image_url: String,
+}
+
+/// 接收 multipart 文件，落盘到 `uploads/rule-images/`，返回短 URL。
+/// 用同一个端点支持 cover / screenshot 两种用途：前端拿到 URL 后自己 `PUT /drafts/{id}`
+/// 写到 `coverUrl` 或 `screenshotUrls`，避免后端要为每种场景写一份几乎一样的代码。
+/// 鉴权：仅作者本人能给自己的草稿上传图片。
+#[tracing::instrument(skip(multipart, upload_dir, store))]
+pub async fn upload_rule_image(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(store): State<RuleStore>,
+    State(upload_dir): State<UploadDir>,
+    Path(draft_id): Path<String>,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<UploadedRuleImageResponse>>, AppError> {
+    // 上传前校验所有者：避免任意登录用户给别人的草稿塞图片导致磁盘膨胀 / 内容投毒。
+    {
+        let guard = store.read().await;
+        let draft = guard.drafts.get(&draft_id).ok_or(AppError::NotFound)?;
+        ensure_owner(&draft.owner_id, &user_id.to_string())?;
+    }
+
+    let mut field = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("解析上传失败：{e}")))?
+        .ok_or_else(|| AppError::InvalidInput("缺少上传文件".to_string()))?;
+
+    let content_type = field.content_type().map(str::to_string).unwrap_or_default();
+    let extension = extension_for_mime(&content_type)
+        .ok_or_else(|| AppError::InvalidInput("仅支持 png / jpeg / webp 格式".to_string()))?;
+
+    let mut bytes = Vec::with_capacity(64 * 1024);
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("读取上传内容失败：{e}")))?
+    {
+        if bytes.len() + chunk.len() > RULE_IMAGE_MAX_BYTES {
+            return Err(AppError::InvalidInput("规则图片不能超过 4MB".to_string()));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.is_empty() {
+        return Err(AppError::InvalidInput("上传文件为空".to_string()));
+    }
+
+    let dir = upload_dir.0.join("rule-images");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("创建上传目录失败：{e}")))?;
+
+    let filename = format!("{}.{extension}", uuid::Uuid::new_v4());
+    let path = dir.join(&filename);
+    tokio::fs::write(&path, &bytes)
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("写入文件失败：{e}")))?;
+
+    Ok(Json(ApiResponse::success(UploadedRuleImageResponse {
+        image_url: format!("/static/rule-images/{filename}"),
+    })))
 }
 
 pub async fn rule_options(
@@ -736,6 +904,37 @@ impl RulePersistence {
         .await
         .inspect_err(|e| tracing::warn!("Database error {e}"))?;
 
+        // Phase 1B：元信息扩展字段（介绍 / 封面 / 截图）。同样幂等升级。
+        sqlx::query(
+            r#"
+            ALTER TABLE rule_drafts
+                ADD COLUMN IF NOT EXISTS introduction TEXT NOT NULL DEFAULT ''
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        sqlx::query(
+            r#"
+            ALTER TABLE rule_drafts
+                ADD COLUMN IF NOT EXISTS cover_url VARCHAR(512) NOT NULL DEFAULT ''
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        sqlx::query(
+            r#"
+            ALTER TABLE rule_drafts
+                ADD COLUMN IF NOT EXISTS screenshot_urls JSONB NOT NULL DEFAULT '[]'::jsonb
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
         // 审核员权限：users 表加 role 字段，默认 'user'，幂等升级。
         sqlx::query(
             r#"
@@ -781,9 +980,43 @@ impl RulePersistence {
                 description TEXT NOT NULL DEFAULT '',
                 version INTEGER NOT NULL DEFAULT 1,
                 design JSONB NOT NULL,
+                introduction TEXT NOT NULL DEFAULT '',
+                cover_url VARCHAR(512) NOT NULL DEFAULT '',
+                screenshot_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        // Phase 1B：旧库升级 rule_published 元信息列。
+        sqlx::query(
+            r#"
+            ALTER TABLE rule_published
+                ADD COLUMN IF NOT EXISTS introduction TEXT NOT NULL DEFAULT ''
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        sqlx::query(
+            r#"
+            ALTER TABLE rule_published
+                ADD COLUMN IF NOT EXISTS cover_url VARCHAR(512) NOT NULL DEFAULT ''
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        sqlx::query(
+            r#"
+            ALTER TABLE rule_published
+                ADD COLUMN IF NOT EXISTS screenshot_urls JSONB NOT NULL DEFAULT '[]'::jsonb
             "#,
         )
         .execute(&self.pool)
@@ -817,6 +1050,9 @@ impl RulePersistence {
                 published_rule_id,
                 forked_from_rule_id,
                 reject_reason,
+                introduction,
+                cover_url,
+                screenshot_urls,
                 (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_at,
                 (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_at
             FROM rule_drafts
@@ -831,6 +1067,9 @@ impl RulePersistence {
             let design: ExportedRuleDesign =
                 serde_json::from_value(design).map_err(AppError::JsonError)?;
             let status = RuleStatus::from_db_str(row.get::<String, _>("status").as_str());
+            let screenshot_urls_raw: serde_json::Value = row.get("screenshot_urls");
+            let screenshot_urls: Vec<String> =
+                serde_json::from_value(screenshot_urls_raw).unwrap_or_default();
 
             let draft = RuleDraft {
                 id: row.get("id"),
@@ -845,6 +1084,9 @@ impl RulePersistence {
                 published_rule_id: row.get("published_rule_id"),
                 forked_from_rule_id: row.get("forked_from_rule_id"),
                 reject_reason: row.get("reject_reason"),
+                introduction: row.get("introduction"),
+                cover_url: row.get("cover_url"),
+                screenshot_urls,
             };
             repository.drafts.insert(draft.id.clone(), draft);
         }
@@ -859,6 +1101,9 @@ impl RulePersistence {
                 description,
                 version,
                 design,
+                introduction,
+                cover_url,
+                screenshot_urls,
                 (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_at,
                 (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_at
             FROM rule_published
@@ -881,6 +1126,9 @@ impl RulePersistence {
                 description.clone(),
                 design.clone(),
             )?;
+            let screenshot_urls_raw: serde_json::Value = row.get("screenshot_urls");
+            let screenshot_urls: Vec<String> =
+                serde_json::from_value(screenshot_urls_raw).unwrap_or_default();
             // 历史数据里 rule_published.id 存纯 UUID，但内存 / API 用 "rule_<uuid>" 前缀，
             // 与 rule_drafts.published_rule_id 字面值对齐。
             let id_raw: String = row.get("id");
@@ -895,6 +1143,9 @@ impl RulePersistence {
                 runtime,
                 created_at: row.get("created_at"),
                 updated_at: row.get("updated_at"),
+                introduction: row.get("introduction"),
+                cover_url: row.get("cover_url"),
+                screenshot_urls,
             };
             repository
                 .published
@@ -911,17 +1162,22 @@ impl RulePersistence {
         let draft_uuid = Uuid::parse_str(&draft.id)
             .map_err(|e| AppError::InvalidInput(format!("草稿 ID 必须是 UUID：{e}")))?;
         let status = draft.status.to_db_str();
+        let screenshot_urls =
+            serde_json::to_value(&draft.screenshot_urls).map_err(AppError::JsonError)?;
 
         sqlx::query(
             r#"
             INSERT INTO rule_drafts (
                 id, owner_id, name, player_count, description, status, design,
-                published_rule_id, forked_from_rule_id, reject_reason, created_at, updated_at
+                published_rule_id, forked_from_rule_id, reject_reason,
+                introduction, cover_url, screenshot_urls,
+                created_at, updated_at
             )
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                to_timestamp($11::double precision / 1000.0),
-                to_timestamp($12::double precision / 1000.0)
+                $11, $12, $13,
+                to_timestamp($14::double precision / 1000.0),
+                to_timestamp($15::double precision / 1000.0)
             )
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -932,6 +1188,9 @@ impl RulePersistence {
                 published_rule_id = EXCLUDED.published_rule_id,
                 forked_from_rule_id = EXCLUDED.forked_from_rule_id,
                 reject_reason = EXCLUDED.reject_reason,
+                introduction = EXCLUDED.introduction,
+                cover_url = EXCLUDED.cover_url,
+                screenshot_urls = EXCLUDED.screenshot_urls,
                 updated_at = EXCLUDED.updated_at
             "#,
         )
@@ -945,6 +1204,9 @@ impl RulePersistence {
         .bind(&draft.published_rule_id)
         .bind(&draft.forked_from_rule_id)
         .bind(&draft.reject_reason)
+        .bind(&draft.introduction)
+        .bind(&draft.cover_url)
+        .bind(screenshot_urls)
         .bind(draft.created_at)
         .bind(draft.updated_at)
         .execute(&self.pool)
@@ -969,17 +1231,20 @@ impl RulePersistence {
         })?;
         let draft_uuid = Uuid::parse_str(draft_id)
             .map_err(|e| AppError::InvalidInput(format!("草稿 ID 必须是 UUID：{e}")))?;
+        let screenshot_urls =
+            serde_json::to_value(&rule.screenshot_urls).map_err(AppError::JsonError)?;
 
         sqlx::query(
             r#"
             INSERT INTO rule_published (
                 id, draft_id, owner_id, name, player_count, description, version,
-                design, created_at, updated_at
+                design, introduction, cover_url, screenshot_urls,
+                created_at, updated_at
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8,
-                to_timestamp($9::double precision / 1000.0),
-                to_timestamp($10::double precision / 1000.0)
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                to_timestamp($12::double precision / 1000.0),
+                to_timestamp($13::double precision / 1000.0)
             )
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -987,6 +1252,9 @@ impl RulePersistence {
                 description = EXCLUDED.description,
                 version = rule_published.version + 1,
                 design = EXCLUDED.design,
+                introduction = EXCLUDED.introduction,
+                cover_url = EXCLUDED.cover_url,
+                screenshot_urls = EXCLUDED.screenshot_urls,
                 updated_at = EXCLUDED.updated_at
             "#,
         )
@@ -998,6 +1266,9 @@ impl RulePersistence {
         .bind(&rule.description)
         .bind(rule.version as i32)
         .bind(design)
+        .bind(&rule.introduction)
+        .bind(&rule.cover_url)
+        .bind(screenshot_urls)
         .bind(rule.created_at)
         .bind(rule.updated_at)
         .execute(&self.pool)
@@ -1096,6 +1367,9 @@ fn build_builtin_test_rule() -> Option<PublishedRule> {
         runtime,
         created_at: now,
         updated_at: now,
+        introduction: String::new(),
+        cover_url: String::new(),
+        screenshot_urls: Vec::new(),
     })
 }
 
@@ -1227,6 +1501,9 @@ fn build_builtin_rule(
         runtime,
         created_at: now,
         updated_at: now,
+        introduction: String::new(),
+        cover_url: String::new(),
+        screenshot_urls: Vec::new(),
     })
 }
 
@@ -1261,6 +1538,9 @@ mod tests {
             runtime: source.runtime,
             created_at: source.created_at,
             updated_at: source.updated_at,
+            introduction: String::new(),
+            cover_url: String::new(),
+            screenshot_urls: Vec::new(),
         }
     }
 
@@ -1500,6 +1780,9 @@ mod tests {
             published_rule_id: None,
             forked_from_rule_id: None,
             reject_reason: None,
+            introduction: String::new(),
+            cover_url: String::new(),
+            screenshot_urls: Vec::new(),
         };
         let json_no_reason = serde_json::to_value(&draft).unwrap();
         assert!(
@@ -1515,5 +1798,271 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("规则不完整")
         );
+    }
+
+    // ----- Phase 1B: 元信息扩展（introduction / cover / screenshots）-----
+
+    /// 构建一个最小可序列化的 RuleDraft，所有 Phase 1B 字段都按入参填好。
+    /// 不强求 design 是合法规则——这里只测 JSON 字段映射。
+    fn meta_test_draft(
+        introduction: &str,
+        cover_url: &str,
+        screenshot_urls: Vec<String>,
+    ) -> RuleDraft {
+        RuleDraft {
+            id: Uuid::new_v4().to_string(),
+            owner_id: Uuid::new_v4().to_string(),
+            name: "demo".to_string(),
+            player_count: 2,
+            description: String::new(),
+            status: RuleStatus::Draft,
+            design: sample_published_rule("x", "x").design,
+            created_at: 0,
+            updated_at: 0,
+            published_rule_id: None,
+            forked_from_rule_id: None,
+            reject_reason: None,
+            introduction: introduction.to_string(),
+            cover_url: cover_url.to_string(),
+            screenshot_urls,
+        }
+    }
+
+    #[test]
+    fn rule_draft_serializes_meta_fields_in_camel_case() {
+        let draft = meta_test_draft(
+            "玩法详解……",
+            "/static/rule-images/cover.png",
+            vec![
+                "/static/rule-images/a.png".to_string(),
+                "https://cdn.example.com/b.jpg".to_string(),
+            ],
+        );
+        let json = serde_json::to_value(&draft).unwrap();
+        assert_eq!(
+            json.get("introduction").and_then(|v| v.as_str()),
+            Some("玩法详解……")
+        );
+        assert_eq!(
+            json.get("coverUrl").and_then(|v| v.as_str()),
+            Some("/static/rule-images/cover.png")
+        );
+        let arr = json
+            .get("screenshotUrls")
+            .and_then(|v| v.as_array())
+            .expect("screenshotUrls 必须以 camelCase 输出");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0].as_str(), Some("/static/rule-images/a.png"));
+    }
+
+    #[test]
+    fn save_rule_draft_request_deserializes_camel_case_meta_fields() {
+        let payload = serde_json::json!({
+            "name": "demo",
+            "playerCount": 2,
+            "description": "",
+            "design": {
+                "cards": [], "groups": [], "components": [],
+                "stateMachine": {"initial":"s","states":{}},
+                "rule": {"playerCount":2}
+            },
+            "introduction": "作者写的介绍",
+            "coverUrl": "/static/rule-images/cover.png",
+            "screenshotUrls": ["/static/rule-images/x.png", "/static/rule-images/y.png"]
+        });
+        let req: SaveRuleDraftRequest = serde_json::from_value(payload).unwrap();
+        assert_eq!(req.introduction, "作者写的介绍");
+        assert_eq!(req.cover_url, "/static/rule-images/cover.png");
+        assert_eq!(req.screenshot_urls.len(), 2);
+        assert_eq!(req.screenshot_urls[1], "/static/rule-images/y.png");
+    }
+
+    #[test]
+    fn save_rule_draft_request_meta_fields_default_when_missing() {
+        // 老 FE 不会发这些字段，必须按空字符串 / 空数组兜底，不能反序列化失败。
+        let payload = serde_json::json!({
+            "name": "demo",
+            "playerCount": 2,
+            "design": {
+                "cards": [], "groups": [], "components": [],
+                "stateMachine": {"initial":"s","states":{}},
+                "rule": {"playerCount":2}
+            }
+        });
+        let req: SaveRuleDraftRequest = serde_json::from_value(payload).unwrap();
+        assert_eq!(req.introduction, "");
+        assert_eq!(req.cover_url, "");
+        assert!(req.screenshot_urls.is_empty());
+    }
+
+    #[test]
+    fn validate_screenshot_urls_rejects_more_than_ten() {
+        let urls: Vec<String> = (0..11)
+            .map(|i| format!("/static/rule-images/{i}.png"))
+            .collect();
+        let err = validate_screenshot_urls(&urls).unwrap_err();
+        assert!(
+            matches!(err, AppError::InvalidInput(ref msg) if msg.contains("10")),
+            "expected InvalidInput mentioning 10, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_screenshot_urls_allows_exactly_ten() {
+        let urls: Vec<String> = (0..10)
+            .map(|i| format!("/static/rule-images/{i}.png"))
+            .collect();
+        validate_screenshot_urls(&urls).expect("10 张应允许");
+    }
+
+    #[test]
+    fn validate_screenshot_urls_rejects_arbitrary_strings() {
+        // 防止作者塞入任意字符串（XSS / javascript: / 相对路径绕过）。
+        let urls = vec!["not-a-url".to_string()];
+        let err = validate_screenshot_urls(&urls).unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput(_)));
+
+        let urls = vec!["javascript:alert(1)".to_string()];
+        assert!(validate_screenshot_urls(&urls).is_err());
+
+        let urls = vec!["/uploads/foo.png".to_string()];
+        assert!(
+            validate_screenshot_urls(&urls).is_err(),
+            "只接受 /static/、http://、https:// 三种前缀"
+        );
+    }
+
+    #[test]
+    fn validate_screenshot_urls_accepts_static_and_http() {
+        let urls = vec![
+            "/static/rule-images/a.png".to_string(),
+            "http://example.com/b.png".to_string(),
+            "https://cdn.example.com/c.png".to_string(),
+        ];
+        validate_screenshot_urls(&urls).expect("三种前缀都应接受");
+    }
+
+    #[test]
+    fn validate_screenshot_urls_rejects_empty_string_element() {
+        let urls = vec!["".to_string()];
+        let err = validate_screenshot_urls(&urls).unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn validate_cover_url_allows_empty_for_no_cover() {
+        // 作者可以不设封面，空字符串视为"没传"。
+        validate_cover_url("").expect("空封面允许");
+    }
+
+    #[test]
+    fn validate_cover_url_rejects_random_string() {
+        let err = validate_cover_url("blob:something").unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn validate_cover_url_rejects_overlong() {
+        let too_long = format!("/static/rule-images/{}", "a".repeat(600));
+        let err = validate_cover_url(&too_long).unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn forked_draft_inherits_meta_fields_from_source_rule() {
+        // fork 出来的草稿继承原作者写好的 introduction / cover / screenshots，
+        // 而不是从空开始（产品决策：作者大概率想接着改）。
+        let mut rule = sample_published_rule("builtin-war-rule", "War 拼点战争");
+        rule.introduction = "原版玩法详解".to_string();
+        rule.cover_url = "/static/rule-images/source-cover.png".to_string();
+        rule.screenshot_urls = vec!["/static/rule-images/s1.png".to_string()];
+
+        let draft = build_forked_draft(&rule, &Uuid::new_v4(), "我的副本".to_string());
+
+        assert_eq!(draft.introduction, "原版玩法详解");
+        assert_eq!(draft.cover_url, "/static/rule-images/source-cover.png");
+        assert_eq!(draft.screenshot_urls, vec!["/static/rule-images/s1.png"]);
+    }
+
+    /// 模拟 update_draft 把 4 个写字段（design + 3 个元信息）全部覆盖到 RuleDraft 上。
+    /// 抽出来便于纯函数测，不需要起 DB / store。
+    fn apply_update_meta(
+        draft: &mut RuleDraft,
+        name: String,
+        design: ExportedRuleDesign,
+        introduction: String,
+        cover_url: String,
+        screenshot_urls: Vec<String>,
+    ) {
+        draft.name = name;
+        draft.design = design;
+        draft.introduction = introduction;
+        draft.cover_url = cover_url;
+        draft.screenshot_urls = screenshot_urls;
+    }
+
+    #[test]
+    fn update_writes_all_four_payload_fields_at_once() {
+        let mut draft = meta_test_draft("旧介绍", "/static/rule-images/old.png", vec![]);
+        let new_design = sample_published_rule("y", "y").design;
+        apply_update_meta(
+            &mut draft,
+            "新名字".to_string(),
+            new_design.clone(),
+            "新介绍".to_string(),
+            "/static/rule-images/new.png".to_string(),
+            vec!["/static/rule-images/a.png".to_string()],
+        );
+        assert_eq!(draft.name, "新名字");
+        assert_eq!(draft.introduction, "新介绍");
+        assert_eq!(draft.cover_url, "/static/rule-images/new.png");
+        assert_eq!(draft.screenshot_urls, vec!["/static/rule-images/a.png"]);
+        // design 也要跟着覆盖（不能因为加新字段忘了写 design）。
+        assert_eq!(
+            serde_json::to_value(&draft.design).unwrap(),
+            serde_json::to_value(&new_design).unwrap()
+        );
+    }
+
+    /// 模拟 approve_draft 从 draft 复制 3 个元信息字段到 PublishedRule。
+    fn build_published_from_draft(draft: &RuleDraft, rule_id: &str) -> PublishedRule {
+        let runtime = RuleEngine::parse(
+            draft.name.clone(),
+            draft.player_count,
+            draft.description.clone(),
+            draft.design.clone(),
+        )
+        .expect("draft 应当是可解析的");
+        PublishedRule {
+            id: rule_id.to_string(),
+            owner_id: draft.owner_id.clone(),
+            name: draft.name.clone(),
+            player_count: draft.player_count,
+            description: draft.description.clone(),
+            version: 1,
+            design: draft.design.clone(),
+            runtime,
+            created_at: draft.created_at,
+            updated_at: draft.updated_at,
+            introduction: draft.introduction.clone(),
+            cover_url: draft.cover_url.clone(),
+            screenshot_urls: draft.screenshot_urls.clone(),
+        }
+    }
+
+    #[test]
+    fn approve_copies_meta_fields_from_draft_to_published_rule() {
+        let draft = meta_test_draft(
+            "玩法详解 + 更新日志",
+            "/static/rule-images/cover.png",
+            vec![
+                "/static/rule-images/a.png".to_string(),
+                "/static/rule-images/b.png".to_string(),
+            ],
+        );
+        let published = build_published_from_draft(&draft, "rule_xyz");
+        assert_eq!(published.introduction, draft.introduction);
+        assert_eq!(published.cover_url, draft.cover_url);
+        assert_eq!(published.screenshot_urls, draft.screenshot_urls);
     }
 }

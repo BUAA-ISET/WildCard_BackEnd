@@ -184,7 +184,7 @@ pub async fn list_published_rules(
     State(persistence): State<RulePersistence>,
     Query(params): Query<RuleQueryParams>,
 ) -> Result<Json<ApiResponse<Vec<PublishedRuleSummary>>>, AppError> {
-    let snapshot: Vec<(String, String, String, String, i64, u8)> = {
+    let snapshot: Vec<(String, String, String, String, i64, u8, String)> = {
         let guard = store.read().await;
         guard
             .published
@@ -197,25 +197,23 @@ pub async fn list_published_rules(
                     rule.description.clone(),
                     rule.created_at,
                     rule.player_count,
+                    rule.cover_url.clone(),
                 )
             })
             .collect()
     };
 
     let mut summaries = Vec::with_capacity(snapshot.len());
-    for (id, owner_id, name, description, created_at, player_count) in snapshot {
+    for (id, owner_id, name, description, created_at, player_count, cover_url) in snapshot {
         if !matches_filter(&name, &description, DEFAULT_RULE_TYPE, &params) {
             continue;
         }
         let developer = resolve_developer(&user_repo, &owner_id).await;
-        summaries.push(build_summary(
-            id,
-            name,
-            description,
-            created_at,
-            player_count,
-            developer,
-        ));
+        let mut summary = build_summary(id, name, description, created_at, player_count, developer);
+        if !cover_url.is_empty() {
+            summary.cover_url = Some(cover_url);
+        }
+        summaries.push(summary);
     }
 
     summaries.sort_by_key(|s| std::cmp::Reverse(s.published_at));
@@ -243,9 +241,21 @@ pub async fn get_published_rule_detail(
     let rule = snapshot.ok_or(AppError::NotFound)?;
 
     let developer = resolve_developer(&user_repo, &rule.owner_id).await;
-    let introduction = placeholder_introduction(&rule.description);
+    // Phase 1B：introduction / cover / screenshots 现在存在 rule_published 行里，
+    // 仅在作者没填时才回退到旧的 description-placeholder。
+    let introduction = if rule.introduction.is_empty() {
+        placeholder_introduction(&rule.description)
+    } else {
+        rule.introduction.clone()
+    };
+    let cover_url = if rule.cover_url.is_empty() {
+        None
+    } else {
+        Some(rule.cover_url.clone())
+    };
+    let screenshots = rule.screenshot_urls.clone();
 
-    let summary = build_summary(
+    let mut summary = build_summary(
         rule.id,
         rule.name,
         rule.description,
@@ -253,8 +263,8 @@ pub async fn get_published_rule_detail(
         rule.player_count,
         developer,
     );
+    summary.cover_url = cover_url;
 
-    let mut summary = summary;
     if let Ok(rule_uuid) = extract_rule_uuid(&summary.id) {
         if let Ok(stats) = fetch_rating_stats(&persistence, rule_uuid).await {
             summary.rating = stats.average;
@@ -266,7 +276,7 @@ pub async fn get_published_rule_detail(
         let detail = PublishedRuleDetail {
             summary,
             introduction,
-            screenshots: Vec::new(),
+            screenshots,
             reviews,
         };
         return Ok(Json(ApiResponse::success(detail)));
@@ -275,7 +285,7 @@ pub async fn get_published_rule_detail(
     let detail = PublishedRuleDetail {
         summary,
         introduction,
-        screenshots: Vec::new(),
+        screenshots,
         reviews: Vec::new(),
     };
     Ok(Json(ApiResponse::success(detail)))
@@ -289,7 +299,7 @@ pub async fn list_developer_rules(
     Query(params): Query<RuleQueryParams>,
 ) -> Result<Json<ApiResponse<Vec<PublishedRuleSummary>>>, AppError> {
     let developer = resolve_developer(&user_repo, &developer_id).await;
-    let snapshot: Vec<(String, String, String, i64, u8)> = {
+    let snapshot: Vec<(String, String, String, i64, u8, String)> = {
         let guard = store.read().await;
         guard
             .published
@@ -302,24 +312,29 @@ pub async fn list_developer_rules(
                     rule.description.clone(),
                     rule.created_at,
                     rule.player_count,
+                    rule.cover_url.clone(),
                 )
             })
             .collect()
     };
 
     let mut summaries = Vec::with_capacity(snapshot.len());
-    for (id, name, description, created_at, player_count) in snapshot {
+    for (id, name, description, created_at, player_count, cover_url) in snapshot {
         if !matches_filter(&name, &description, DEFAULT_RULE_TYPE, &params) {
             continue;
         }
-        summaries.push(build_summary(
+        let mut summary = build_summary(
             id,
             name,
             description,
             created_at,
             player_count,
             developer.clone(),
-        ));
+        );
+        if !cover_url.is_empty() {
+            summary.cover_url = Some(cover_url);
+        }
+        summaries.push(summary);
     }
 
     summaries.sort_by_key(|s| std::cmp::Reverse(s.published_at));
