@@ -71,6 +71,7 @@ mod infrastructure {
                     email: self.email,
                     password: self.password,
                     avatar: self.avatar,
+                    role: "user".to_string(),
                 }
             }
         }

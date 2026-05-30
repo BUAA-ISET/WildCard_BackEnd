@@ -3,10 +3,12 @@ CREATE TABLE IF NOT EXISTS users (
     name VARCHAR(255) UNIQUE NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
-    avatar VARCHAR(512) NOT NULL DEFAULT ''
+    avatar VARCHAR(512) NOT NULL DEFAULT '',
+    role VARCHAR(16) NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin'))
 );
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar VARCHAR(512) NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'user';
 
 CREATE INDEX IF NOT EXISTS idx_users_name ON users(name);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -21,11 +23,13 @@ CREATE TABLE IF NOT EXISTS rule_drafts (
     design JSONB NOT NULL,
     published_rule_id VARCHAR(128),
     forked_from_rule_id VARCHAR(128),
+    reject_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 ALTER TABLE rule_drafts ADD COLUMN IF NOT EXISTS forked_from_rule_id VARCHAR(128);
+ALTER TABLE rule_drafts ADD COLUMN IF NOT EXISTS reject_reason TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_rule_drafts_owner_updated
     ON rule_drafts(owner_id, updated_at DESC);
@@ -60,3 +64,7 @@ CREATE TABLE IF NOT EXISTS rule_reviews (
 
 CREATE INDEX IF NOT EXISTS idx_rule_reviews_rule_created
     ON rule_reviews(rule_id, created_at DESC);
+
+-- 首任管理员：保证 Tanhhhhtjy 始终拥有 admin 角色（手动改回 user 不会被覆盖，
+-- 因为应用启动时使用了 AND role <> 'admin' 守卫；init.sql 仅用于全新部署）。
+UPDATE users SET role = 'admin' WHERE name = 'Tanhhhhtjy';

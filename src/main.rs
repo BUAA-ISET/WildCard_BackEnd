@@ -145,7 +145,21 @@ async fn main() {
         )
         .route(
             "/api/rules/drafts/{draft_id}/publish",
+            #[allow(deprecated)]
             post(rule::publish_draft),
+        )
+        .route(
+            "/api/rules/drafts/{draft_id}/submit-review",
+            post(rule::submit_review),
+        )
+        .route("/api/admin/rules/pending", get(rule::list_pending_reviews))
+        .route(
+            "/api/admin/rules/{draft_id}/approve",
+            post(rule::approve_draft),
+        )
+        .route(
+            "/api/admin/rules/{draft_id}/reject",
+            post(rule::reject_draft),
         )
         .route("/api/rules/published", get(market::list_published_rules))
         .route(

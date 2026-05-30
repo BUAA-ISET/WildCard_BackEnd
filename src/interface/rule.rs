@@ -10,8 +10,12 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
-    domain::rule_engine::{ExportedRuleDesign, RuleEngine, RuntimeRule},
+    domain::{
+        rule_engine::{ExportedRuleDesign, RuleEngine, RuntimeRule},
+        user::UserId,
+    },
     error::AppError,
+    infrastructure::user::UserRepository,
     interface::auth::TokenClaims,
     state::RuleStore,
 };
@@ -63,13 +67,44 @@ pub struct RuleDraft {
     pub published_rule_id: Option<String>,
     #[serde(rename = "forkedFromRuleId", skip_serializing_if = "Option::is_none")]
     pub forked_from_rule_id: Option<String>,
+    #[serde(rename = "rejectReason", skip_serializing_if = "Option::is_none")]
+    pub reject_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RuleStatus {
+    /// 作者本地草稿，不在审核队列，市场不可见。
     Draft,
+    /// 已提交，等待管理员审核。
+    PendingReview,
+    /// 审核通过，已发布到市场。
     Published,
+    /// 审核被驳回，作者需要修改后重新提交。
+    Rejected,
+}
+
+impl RuleStatus {
+    /// 序列化到 DB 时使用 snake_case 字符串；与 camelCase 序列化值（pendingReview）不同，
+    /// 因为现存数据已是 snake_case，避免一次性迁移。
+    pub fn to_db_str(self) -> &'static str {
+        match self {
+            RuleStatus::Draft => "draft",
+            RuleStatus::PendingReview => "pending_review",
+            RuleStatus::Published => "published",
+            RuleStatus::Rejected => "rejected",
+        }
+    }
+
+    /// 兜底到 Draft：未知值（包括旧数据残留）按草稿处理，避免阻塞读取。
+    pub fn from_db_str(value: &str) -> Self {
+        match value {
+            "pending_review" => RuleStatus::PendingReview,
+            "published" => RuleStatus::Published,
+            "rejected" => RuleStatus::Rejected,
+            _ => RuleStatus::Draft,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -154,7 +189,7 @@ pub async fn list_drafts(
             name: draft.name.clone(),
             player_count: draft.player_count,
             description: draft.description.clone(),
-            status: draft.status.clone(),
+            status: draft.status,
             updated_at: draft.updated_at,
             published_rule_id: draft.published_rule_id.clone(),
         })
@@ -191,10 +226,11 @@ pub async fn save_draft(
         updated_at: now,
         published_rule_id: None,
         forked_from_rule_id: None,
+        reject_reason: None,
     };
     let response = SaveDraftResponse {
         id: draft.id.clone(),
-        status: draft.status.clone(),
+        status: draft.status,
         updated_at: draft.updated_at,
     };
 
@@ -227,13 +263,18 @@ pub async fn update_draft(
     draft.player_count = payload.player_count;
     draft.description = payload.description;
     draft.design = payload.design;
-    draft.status = RuleStatus::Draft;
+    // 编辑动作把任何非草稿状态（pending_review / rejected / published）都拉回 Draft，
+    // 强制走"重新提审"的路径，避免市场上线版本被原地改掉或绕过审核。
+    if draft.status != RuleStatus::Draft {
+        draft.status = RuleStatus::Draft;
+        draft.reject_reason = None;
+    }
     draft.updated_at = now;
     persistence.save_draft(draft).await?;
 
     Ok(Json(ApiResponse::success(SaveDraftResponse {
         id: draft.id.clone(),
-        status: draft.status.clone(),
+        status: draft.status,
         updated_at: draft.updated_at,
     })))
 }
@@ -265,7 +306,7 @@ pub async fn delete_draft(
         name: draft.name.clone(),
         player_count: draft.player_count,
         description: draft.description.clone(),
-        status: draft.status.clone(),
+        status: draft.status,
         updated_at: draft.updated_at,
         published_rule_id: draft.published_rule_id.clone(),
     };
@@ -283,17 +324,188 @@ pub async fn delete_draft(
     Ok(Json(ApiResponse::success(summary)))
 }
 
-pub async fn publish_draft(
+/// 作者提交规则草稿进入审核队列。
+/// 允许从 Draft / Rejected 进入 PendingReview。
+/// Published 状态（已上线）不应直接出现在这里——`update_draft` 已经把任何编辑都拉回 Draft，
+/// 所以正常 FE 调用不会触发；但为了防御性，这里仍接受 Published 输入并拉回 PendingReview，
+/// 让作者从市场版本"复审"也能走通。
+pub async fn submit_review(
     TokenClaims { user_id, .. }: TokenClaims,
     State(store): State<RuleStore>,
     State(persistence): State<RulePersistence>,
     Path(draft_id): Path<String>,
-) -> Result<Json<ApiResponse<PublishRuleResponse>>, AppError> {
+) -> Result<Json<ApiResponse<SaveDraftResponse>>, AppError> {
+    // 提交前再 parse 一遍，提前把 design 错误暴露给作者，省得审核员看到一份本就跑不通的规则。
     let mut guard = store.write().await;
     let draft = guard.drafts.get_mut(&draft_id).ok_or(AppError::NotFound)?;
     ensure_owner(&draft.owner_id, &user_id.to_string())?;
+    RuleEngine::parse(
+        draft.name.clone(),
+        draft.player_count,
+        draft.description.clone(),
+        draft.design.clone(),
+    )?;
 
-    // 发布时生成后端运行态规则，房间开局时直接按 ruleId 取出并再次用于初始化对局。
+    if matches!(draft.status, RuleStatus::PendingReview) {
+        // 幂等：已在审核队列里就直接返回当前状态，避免 FE 误触发多次时报错。
+        let resp = SaveDraftResponse {
+            id: draft.id.clone(),
+            status: draft.status,
+            updated_at: draft.updated_at,
+        };
+        return Ok(Json(ApiResponse::success(resp)));
+    }
+
+    draft.status = RuleStatus::PendingReview;
+    draft.reject_reason = None;
+    draft.updated_at = now_millis();
+    persistence.save_draft(draft).await?;
+
+    Ok(Json(ApiResponse::success(SaveDraftResponse {
+        id: draft.id.clone(),
+        status: draft.status,
+        updated_at: draft.updated_at,
+    })))
+}
+
+/// 老的 `POST /api/rules/drafts/{id}/publish` 接口——保留路径但行为已经降级为"提交审核"。
+/// FE 旧版本仍可继续调用，新版本应改用 `submit-review`。删除路由会让旧 FE 立刻 404，
+/// 因此 Phase 1 选择降级别名而非删除。下一个版本可以下线。
+#[deprecated(note = "改用 submit_review；本函数保留只为兼容旧 FE，行为已变成提审而非直发")]
+pub async fn publish_draft(
+    claims: TokenClaims,
+    store: State<RuleStore>,
+    persistence: State<RulePersistence>,
+    path: Path<String>,
+) -> Result<Json<ApiResponse<SaveDraftResponse>>, AppError> {
+    submit_review(claims, store, persistence, path).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RejectDraftRequest {
+    pub reason: String,
+}
+
+const REJECT_REASON_MAX_LEN: usize = 512;
+
+/// 校验驳回理由：trim 后非空，长度上限 512 字。
+/// 抽出来方便单测覆盖（审核员手动写理由是高频出错点）。
+pub fn validate_reject_reason(raw: &str) -> Result<String, AppError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidInput("驳回理由不能为空".to_string()));
+    }
+    if trimmed.chars().count() > REJECT_REASON_MAX_LEN {
+        return Err(AppError::InvalidInput(format!(
+            "驳回理由不能超过 {REJECT_REASON_MAX_LEN} 字"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// 管理员守卫：查 DB 拿当前用户角色，非 admin 返 403。
+/// 写成普通 async fn 而非 axum extractor，省掉 FromRequestParts/State 注入的样板代码。
+pub async fn ensure_admin(user_id: &UserId, user_repo: &UserRepository) -> Result<(), AppError> {
+    let user = user_repo
+        .find_by_id(user_id)
+        .await?
+        .ok_or(AppError::Unauthorized("用户不存在".to_string()))?;
+    if user.role != "admin" {
+        return Err(AppError::Forbidden("仅管理员可执行此操作".to_string()));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PendingDraftSummary {
+    #[serde(rename = "draftId")]
+    pub draft_id: String,
+    pub name: String,
+    #[serde(rename = "ownerId")]
+    pub owner_id: String,
+    #[serde(rename = "ownerName")]
+    pub owner_name: String,
+    #[serde(rename = "playerCount")]
+    pub player_count: u8,
+    pub description: String,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: i64,
+    pub design: ExportedRuleDesign,
+}
+
+pub async fn list_pending_reviews(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(store): State<RuleStore>,
+    State(user_repo): State<Arc<UserRepository>>,
+) -> Result<Json<ApiResponse<Vec<PendingDraftSummary>>>, AppError> {
+    ensure_admin(&user_id, &user_repo).await?;
+
+    // 1. 先快照需要的 owner_id 列表，避免在锁里 await DB。
+    let drafts: Vec<RuleDraft> = {
+        let guard = store.read().await;
+        guard
+            .drafts
+            .values()
+            .filter(|d| d.status == RuleStatus::PendingReview)
+            .cloned()
+            .collect()
+    };
+
+    // 2. 解析作者姓名（缓存避免重复查同一作者）。失败时退化为 owner_id 字符串。
+    let mut owner_name_cache: HashMap<String, String> = HashMap::new();
+    let mut out = Vec::with_capacity(drafts.len());
+    for draft in drafts {
+        let owner_name = if let Some(name) = owner_name_cache.get(&draft.owner_id) {
+            name.clone()
+        } else {
+            let resolved = match Uuid::parse_str(&draft.owner_id) {
+                Ok(uuid) => user_repo
+                    .find_by_id(&UserId(uuid))
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|u| u.name)
+                    .unwrap_or_else(|| draft.owner_id.clone()),
+                Err(_) => draft.owner_id.clone(),
+            };
+            owner_name_cache.insert(draft.owner_id.clone(), resolved.clone());
+            resolved
+        };
+        out.push(PendingDraftSummary {
+            draft_id: draft.id.clone(),
+            name: draft.name.clone(),
+            owner_id: draft.owner_id.clone(),
+            owner_name,
+            player_count: draft.player_count,
+            description: draft.description.clone(),
+            updated_at: draft.updated_at,
+            design: draft.design.clone(),
+        });
+    }
+    // 早提交的排前面，让审核员按 FIFO 处理。
+    out.sort_by_key(|d| d.updated_at);
+    Ok(Json(ApiResponse::success(out)))
+}
+
+pub async fn approve_draft(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(store): State<RuleStore>,
+    State(persistence): State<RulePersistence>,
+    State(user_repo): State<Arc<UserRepository>>,
+    Path(draft_id): Path<String>,
+) -> Result<Json<ApiResponse<PublishRuleResponse>>, AppError> {
+    ensure_admin(&user_id, &user_repo).await?;
+
+    let mut guard = store.write().await;
+    let draft = guard.drafts.get_mut(&draft_id).ok_or(AppError::NotFound)?;
+    if draft.status != RuleStatus::PendingReview {
+        return Err(AppError::Conflict(format!(
+            "草稿当前状态为 {}，无法批准，必须先重新提交审核",
+            draft.status.to_db_str()
+        )));
+    }
+
+    // 发布运行态规则，房间开局时按 ruleId 取出再次用于初始化对局。
     let runtime = RuleEngine::parse(
         draft.name.clone(),
         draft.player_count,
@@ -306,23 +518,23 @@ pub async fn publish_draft(
         .clone()
         .unwrap_or_else(|| format!("rule_{}", uuid::Uuid::new_v4()));
 
-    let published_rule = {
-        draft.status = RuleStatus::Published;
-        draft.updated_at = now;
-        draft.published_rule_id = Some(rule_id.clone());
+    draft.status = RuleStatus::Published;
+    draft.updated_at = now;
+    draft.published_rule_id = Some(rule_id.clone());
+    draft.reject_reason = None;
+    let owner_id_string = draft.owner_id.clone();
 
-        PublishedRule {
-            id: rule_id.clone(),
-            owner_id: user_id.to_string(),
-            name: draft.name.clone(),
-            player_count: draft.player_count,
-            description: draft.description.clone(),
-            version: 1,
-            design: draft.design.clone(),
-            runtime,
-            created_at: now,
-            updated_at: now,
-        }
+    let published_rule = PublishedRule {
+        id: rule_id.clone(),
+        owner_id: owner_id_string,
+        name: draft.name.clone(),
+        player_count: draft.player_count,
+        description: draft.description.clone(),
+        version: 1,
+        design: draft.design.clone(),
+        runtime,
+        created_at: now,
+        updated_at: now,
     };
 
     persistence.save_draft(draft).await?;
@@ -335,6 +547,40 @@ pub async fn publish_draft(
         rule_id,
         version: 1,
         status: RuleStatus::Published,
+    })))
+}
+
+pub async fn reject_draft(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(store): State<RuleStore>,
+    State(persistence): State<RulePersistence>,
+    State(user_repo): State<Arc<UserRepository>>,
+    Path(draft_id): Path<String>,
+    Json(payload): Json<RejectDraftRequest>,
+) -> Result<Json<ApiResponse<SaveDraftResponse>>, AppError> {
+    ensure_admin(&user_id, &user_repo).await?;
+
+    // 先校验入参再加写锁，避免反复加锁。
+    let reason = validate_reject_reason(&payload.reason)?;
+
+    let mut guard = store.write().await;
+    let draft = guard.drafts.get_mut(&draft_id).ok_or(AppError::NotFound)?;
+    if draft.status != RuleStatus::PendingReview {
+        return Err(AppError::Conflict(format!(
+            "草稿当前状态为 {}，无法驳回，仅 pending_review 可被驳回",
+            draft.status.to_db_str()
+        )));
+    }
+
+    draft.status = RuleStatus::Rejected;
+    draft.reject_reason = Some(reason);
+    draft.updated_at = now_millis();
+    persistence.save_draft(draft).await?;
+
+    Ok(Json(ApiResponse::success(SaveDraftResponse {
+        id: draft.id.clone(),
+        status: draft.status,
+        updated_at: draft.updated_at,
     })))
 }
 
@@ -380,6 +626,7 @@ pub fn build_forked_draft(rule: &PublishedRule, user_id: &Uuid, name: String) ->
         updated_at: now,
         published_rule_id: None,
         forked_from_rule_id: Some(rule.id.clone()),
+        reject_reason: None,
     }
 }
 
@@ -406,7 +653,7 @@ pub async fn fork_published_rule(
     let draft = build_forked_draft(&source, &user_id.0, name);
     let response = SaveDraftResponse {
         id: draft.id.clone(),
-        status: draft.status.clone(),
+        status: draft.status,
         updated_at: draft.updated_at,
     };
 
@@ -474,6 +721,41 @@ impl RulePersistence {
         .await
         .inspect_err(|e| tracing::warn!("Database error {e}"))?;
 
+        // 审核流引入的驳回理由字段，老库升级用 IF NOT EXISTS 保持幂等。
+        sqlx::query(
+            r#"
+            ALTER TABLE rule_drafts
+                ADD COLUMN IF NOT EXISTS reject_reason TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        // 审核员权限：users 表加 role 字段，默认 'user'，幂等升级。
+        sqlx::query(
+            r#"
+            ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'user'
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        // 首任管理员 boot-strap：仅当 Tanhhhhtjy 当前不是 admin 时才更新，
+        // 避免覆盖运维手动改过的角色（例如临时降级）。这条 UPDATE 在用户表为空时是 no-op。
+        sqlx::query(
+            r#"
+            UPDATE users
+                SET role = 'admin'
+                WHERE name = 'Tanhhhhtjy' AND role <> 'admin'
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
         sqlx::query(
             r#"
             CREATE INDEX IF NOT EXISTS idx_rule_drafts_owner_updated
@@ -530,6 +812,7 @@ impl RulePersistence {
                 design,
                 published_rule_id,
                 forked_from_rule_id,
+                reject_reason,
                 (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_at,
                 (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_at
             FROM rule_drafts
@@ -543,10 +826,7 @@ impl RulePersistence {
             let design: serde_json::Value = row.get("design");
             let design: ExportedRuleDesign =
                 serde_json::from_value(design).map_err(AppError::JsonError)?;
-            let status = match row.get::<String, _>("status").as_str() {
-                "published" => RuleStatus::Published,
-                _ => RuleStatus::Draft,
-            };
+            let status = RuleStatus::from_db_str(row.get::<String, _>("status").as_str());
 
             let draft = RuleDraft {
                 id: row.get("id"),
@@ -560,6 +840,7 @@ impl RulePersistence {
                 updated_at: row.get("updated_at"),
                 published_rule_id: row.get("published_rule_id"),
                 forked_from_rule_id: row.get("forked_from_rule_id"),
+                reject_reason: row.get("reject_reason"),
             };
             repository.drafts.insert(draft.id.clone(), draft);
         }
@@ -625,21 +906,18 @@ impl RulePersistence {
             .map_err(|e| AppError::InvalidInput(format!("规则作者 ID 无效：{e}")))?;
         let draft_uuid = Uuid::parse_str(&draft.id)
             .map_err(|e| AppError::InvalidInput(format!("草稿 ID 必须是 UUID：{e}")))?;
-        let status = match draft.status {
-            RuleStatus::Draft => "draft",
-            RuleStatus::Published => "published",
-        };
+        let status = draft.status.to_db_str();
 
         sqlx::query(
             r#"
             INSERT INTO rule_drafts (
                 id, owner_id, name, player_count, description, status, design,
-                published_rule_id, forked_from_rule_id, created_at, updated_at
+                published_rule_id, forked_from_rule_id, reject_reason, created_at, updated_at
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9,
-                to_timestamp($10::double precision / 1000.0),
-                to_timestamp($11::double precision / 1000.0)
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                to_timestamp($11::double precision / 1000.0),
+                to_timestamp($12::double precision / 1000.0)
             )
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -649,6 +927,7 @@ impl RulePersistence {
                 design = EXCLUDED.design,
                 published_rule_id = EXCLUDED.published_rule_id,
                 forked_from_rule_id = EXCLUDED.forked_from_rule_id,
+                reject_reason = EXCLUDED.reject_reason,
                 updated_at = EXCLUDED.updated_at
             "#,
         )
@@ -661,6 +940,7 @@ impl RulePersistence {
         .bind(design)
         .bind(&draft.published_rule_id)
         .bind(&draft.forked_from_rule_id)
+        .bind(&draft.reject_reason)
         .bind(draft.created_at)
         .bind(draft.updated_at)
         .execute(&self.pool)
@@ -1048,6 +1328,188 @@ mod tests {
         assert!(
             matches!(err, AppError::InvalidInput(ref msg) if msg.contains(&FORK_NAME_MAX_LEN.to_string())),
             "expected InvalidInput mentioning the limit, got {err:?}"
+        );
+    }
+
+    // ----- 审核流相关 -----
+
+    #[test]
+    fn rule_status_serializes_as_camel_case() {
+        // 出网（FE / JSON）协议：四态都用 camelCase。
+        assert_eq!(
+            serde_json::to_string(&RuleStatus::Draft).unwrap(),
+            "\"draft\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RuleStatus::PendingReview).unwrap(),
+            "\"pendingReview\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RuleStatus::Published).unwrap(),
+            "\"published\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RuleStatus::Rejected).unwrap(),
+            "\"rejected\""
+        );
+    }
+
+    #[test]
+    fn rule_status_deserializes_from_camel_case() {
+        assert_eq!(
+            serde_json::from_str::<RuleStatus>("\"pendingReview\"").unwrap(),
+            RuleStatus::PendingReview
+        );
+        assert_eq!(
+            serde_json::from_str::<RuleStatus>("\"rejected\"").unwrap(),
+            RuleStatus::Rejected
+        );
+    }
+
+    #[test]
+    fn rule_status_db_string_roundtrip_all_variants() {
+        // DB 层用 snake_case，与历史数据保持一致；四态都要能往返。
+        for status in [
+            RuleStatus::Draft,
+            RuleStatus::PendingReview,
+            RuleStatus::Published,
+            RuleStatus::Rejected,
+        ] {
+            let s = status.to_db_str();
+            assert_eq!(RuleStatus::from_db_str(s), status, "roundtrip 失败：{s}");
+        }
+    }
+
+    #[test]
+    fn rule_status_from_db_str_unknown_falls_back_to_draft() {
+        // 兜底：未知字符串（脏数据 / 旧版本残留）按 Draft 处理，避免阻塞读取。
+        assert_eq!(RuleStatus::from_db_str(""), RuleStatus::Draft);
+        assert_eq!(RuleStatus::from_db_str("garbage"), RuleStatus::Draft);
+        // camelCase 写入 DB 也算异常，兜底成 Draft（理论上不会发生，但要稳）。
+        assert_eq!(RuleStatus::from_db_str("pendingReview"), RuleStatus::Draft);
+    }
+
+    #[test]
+    fn validate_reject_reason_rejects_empty_and_whitespace() {
+        assert!(matches!(
+            validate_reject_reason(""),
+            Err(AppError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            validate_reject_reason("   \n\t  "),
+            Err(AppError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn validate_reject_reason_trims_and_keeps_content() {
+        assert_eq!(
+            validate_reject_reason("  规则名称疑似违规  ").unwrap(),
+            "规则名称疑似违规"
+        );
+    }
+
+    #[test]
+    fn validate_reject_reason_rejects_overlong_text() {
+        let too_long: String = "字".repeat(REJECT_REASON_MAX_LEN + 1);
+        let err = validate_reject_reason(&too_long).unwrap_err();
+        assert!(
+            matches!(err, AppError::InvalidInput(ref msg) if msg.contains(&REJECT_REASON_MAX_LEN.to_string())),
+            "expected InvalidInput mentioning the limit, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_reject_reason_allows_exactly_max_len() {
+        // 边界值：恰好 512 字应通过。
+        let exact: String = "x".repeat(REJECT_REASON_MAX_LEN);
+        assert_eq!(validate_reject_reason(&exact).unwrap().len(), exact.len());
+    }
+
+    /// 模拟 update_draft 的状态重置逻辑：作者编辑非 Draft 草稿应被拉回 Draft 并清空 reject_reason。
+    /// 把核心状态机抽出来用纯函数测，不需要起 DB / store。
+    fn apply_edit_reset(
+        status: RuleStatus,
+        reject_reason: Option<String>,
+    ) -> (RuleStatus, Option<String>) {
+        if status != RuleStatus::Draft {
+            (RuleStatus::Draft, None)
+        } else {
+            (status, reject_reason)
+        }
+    }
+
+    #[test]
+    fn edit_resets_pending_review_to_draft() {
+        let (status, reason) = apply_edit_reset(RuleStatus::PendingReview, None);
+        assert_eq!(status, RuleStatus::Draft);
+        assert!(reason.is_none());
+    }
+
+    #[test]
+    fn edit_resets_rejected_to_draft_and_clears_reason() {
+        let (status, reason) = apply_edit_reset(RuleStatus::Rejected, Some("不合规".to_string()));
+        assert_eq!(status, RuleStatus::Draft);
+        assert!(reason.is_none(), "rejected 编辑后必须清掉 reject_reason");
+    }
+
+    #[test]
+    fn edit_resets_published_to_draft_keeping_market_version_untouched() {
+        // 已发布草稿被作者再编辑，本地状态拉回 Draft；rule_published 行不在本函数职责内。
+        let (status, _) = apply_edit_reset(RuleStatus::Published, None);
+        assert_eq!(status, RuleStatus::Draft);
+    }
+
+    #[test]
+    fn edit_keeps_draft_status_intact() {
+        let (status, reason) = apply_edit_reset(RuleStatus::Draft, None);
+        assert_eq!(status, RuleStatus::Draft);
+        assert!(reason.is_none());
+    }
+
+    #[test]
+    fn reject_draft_request_deserializes_camel_case_reason() {
+        let req: RejectDraftRequest = serde_json::from_str(r#"{"reason":"重复规则"}"#).unwrap();
+        assert_eq!(req.reason, "重复规则");
+    }
+
+    #[test]
+    fn rule_draft_serializes_reject_reason_only_when_present() {
+        // None 时字段不出现在 JSON 里，避免 FE 模板空字段触发"显示驳回理由"逻辑。
+        let mut draft = RuleDraft {
+            id: Uuid::new_v4().to_string(),
+            owner_id: Uuid::new_v4().to_string(),
+            name: "demo".to_string(),
+            player_count: 2,
+            description: String::new(),
+            status: RuleStatus::Draft,
+            design: serde_json::from_value(serde_json::json!({
+                "cards": [],
+                "groups": [],
+                "components": [],
+                "stateMachine": {"initial":"s","states":{}},
+                "rule": {"playerCount":2}
+            }))
+            .unwrap_or_else(|_| sample_published_rule("x", "x").design),
+            created_at: 0,
+            updated_at: 0,
+            published_rule_id: None,
+            forked_from_rule_id: None,
+            reject_reason: None,
+        };
+        let json_no_reason = serde_json::to_value(&draft).unwrap();
+        assert!(
+            json_no_reason.get("rejectReason").is_none(),
+            "reject_reason=None 时不应输出 rejectReason 字段"
+        );
+
+        draft.reject_reason = Some("规则不完整".to_string());
+        let json_with_reason = serde_json::to_value(&draft).unwrap();
+        assert_eq!(
+            json_with_reason
+                .get("rejectReason")
+                .and_then(|v| v.as_str()),
+            Some("规则不完整")
         );
     }
 }

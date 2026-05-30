@@ -44,7 +44,7 @@ impl UserRepository {
 
     pub async fn find_by_name(&self, name: &str) -> Result<Option<User>, AppError> {
         let user = sqlx::query(
-            "SELECT id, name, email, password, avatar FROM users WHERE users.name = $1",
+            "SELECT id, name, email, password, avatar, role FROM users WHERE users.name = $1",
         )
         .bind(name)
         .fetch_optional(&self.pool)
@@ -56,6 +56,7 @@ impl UserRepository {
             email: user.get("email"),
             password: user.get("password"),
             avatar: user.get("avatar"),
+            role: user.get("role"),
         });
 
         Ok(user)
@@ -63,7 +64,7 @@ impl UserRepository {
 
     pub async fn find_by_email(&self, email: &str) -> Result<Option<User>, AppError> {
         let user = sqlx::query(
-            "SELECT id, name, email, password, avatar FROM users WHERE users.email = $1",
+            "SELECT id, name, email, password, avatar, role FROM users WHERE users.email = $1",
         )
         .bind(email)
         .fetch_optional(&self.pool)
@@ -75,25 +76,28 @@ impl UserRepository {
             email: user.get("email"),
             password: user.get("password"),
             avatar: user.get("avatar"),
+            role: user.get("role"),
         });
 
         Ok(user)
     }
 
     pub async fn find_by_id(&self, user_id: &UserId) -> Result<Option<User>, AppError> {
-        let user =
-            sqlx::query("SELECT id, name, email, password, avatar FROM users WHERE users.id = $1")
-                .bind(user_id.0)
-                .fetch_optional(&self.pool)
-                .await
-                .inspect_err(|e| tracing::warn!("Database error {e}"))?
-                .map(|user| User {
-                    id: UserId(user.get("id")),
-                    name: user.get("name"),
-                    email: user.get("email"),
-                    password: user.get("password"),
-                    avatar: user.get("avatar"),
-                });
+        let user = sqlx::query(
+            "SELECT id, name, email, password, avatar, role FROM users WHERE users.id = $1",
+        )
+        .bind(user_id.0)
+        .fetch_optional(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?
+        .map(|user| User {
+            id: UserId(user.get("id")),
+            name: user.get("name"),
+            email: user.get("email"),
+            password: user.get("password"),
+            avatar: user.get("avatar"),
+            role: user.get("role"),
+        });
 
         Ok(user)
     }
@@ -104,7 +108,7 @@ impl UserRepository {
         username: &str,
     ) -> Result<User, AppError> {
         let user = sqlx::query(
-            "UPDATE users SET name = $1 WHERE id = $2 RETURNING id, name, email, password, avatar",
+            "UPDATE users SET name = $1 WHERE id = $2 RETURNING id, name, email, password, avatar, role",
         )
         .bind(username)
         .bind(user_id.0)
@@ -132,12 +136,13 @@ impl UserRepository {
             email: user.get("email"),
             password: user.get("password"),
             avatar: user.get("avatar"),
+            role: user.get("role"),
         })
     }
 
     pub async fn update_email(&self, user_id: &UserId, email: &str) -> Result<User, AppError> {
         let user = sqlx::query(
-            "UPDATE users SET email = $1 WHERE id = $2 RETURNING id, name, email, password, avatar",
+            "UPDATE users SET email = $1 WHERE id = $2 RETURNING id, name, email, password, avatar, role",
         )
         .bind(email)
         .bind(user_id.0)
@@ -165,6 +170,7 @@ impl UserRepository {
             email: user.get("email"),
             password: user.get("password"),
             avatar: user.get("avatar"),
+            role: user.get("role"),
         })
     }
 
@@ -185,7 +191,7 @@ impl UserRepository {
 
     pub async fn update_avatar(&self, user_id: &UserId, avatar: &str) -> Result<User, AppError> {
         let user = sqlx::query(
-            "UPDATE users SET avatar = $1 WHERE id = $2 RETURNING id, name, email, password, avatar",
+            "UPDATE users SET avatar = $1 WHERE id = $2 RETURNING id, name, email, password, avatar, role",
         )
         .bind(avatar)
         .bind(user_id.0)
@@ -199,6 +205,7 @@ impl UserRepository {
             email: user.get("email"),
             password: user.get("password"),
             avatar: user.get("avatar"),
+            role: user.get("role"),
         })
     }
 

@@ -355,6 +355,8 @@ pub async fn register(
         email: email.clone(),
         password,
         avatar: String::new(),
+        // 新注册一律是普通用户；首任管理员靠 init.sql / ensure_schema 的 UPDATE Tanhhhhtjy 完成。
+        role: "user".to_string(),
     };
     user_repo.register(user).await?;
 
