@@ -24,10 +24,14 @@ pub enum AppError {
     UserAlreadyExist(String),
     #[error("没有登录")]
     Unauthorized(String),
+    #[error("权限不足：{0}")]
+    Forbidden(String),
     #[error("加密错误")]
     CryptoError(#[from] password_hash::Error),
     #[error("JSON 解析错误：{0}")]
     JsonError(#[from] serde_json::Error),
+    #[error("操作与当前状态冲突：{0}")]
+    Conflict(String),
 }
 
 impl IntoResponse for AppError {
@@ -37,6 +41,8 @@ impl IntoResponse for AppError {
             AppError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::UserAlreadyExist(msg) => (StatusCode::CONFLICT, msg),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             AppError::DatabaseError(error) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
             }
