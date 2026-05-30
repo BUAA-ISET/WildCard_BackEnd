@@ -386,9 +386,23 @@ pub struct RuleRatingStats {
     pub count: u32,
 }
 
+/// 把规则的字符串 ID 映射成 `rule_reviews.rule_id` (UUID 列) 用的稳定 UUID。
+///
+/// 三种 ID 形态：
+/// 1. 标准 UUID（极少手写）→ 直接 parse
+/// 2. 用户发布规则 `rule_<uuid>` → strip 前缀后 parse
+/// 3. builtin 规则 `builtin-xxx-rule` / `party` / `classic` 等字符串
+///    → 用 UUID v5 + WildCard 命名空间确定性派生一个稳定 UUID。
+///    同名 builtin 永远映射到同一个 UUID，跨进程重启 / 多机部署都一致，
+///    不污染 DB schema 也不需要在内存里维护映射表。
 fn extract_rule_uuid(rule_id: &str) -> Result<uuid::Uuid, AppError> {
     let trimmed = rule_id.strip_prefix("rule_").unwrap_or(rule_id);
-    uuid::Uuid::parse_str(trimmed).map_err(|e| AppError::InvalidInput(format!("规则 ID 无效：{e}")))
+    if let Ok(parsed) = uuid::Uuid::parse_str(trimmed) {
+        return Ok(parsed);
+    }
+    const BUILTIN_NAMESPACE: uuid::Uuid =
+        uuid::Uuid::from_u128(0x7c9ab1c6_4d36_4ed2_9aa7_2c1f55f5f5f5);
+    Ok(uuid::Uuid::new_v5(&BUILTIN_NAMESPACE, rule_id.as_bytes()))
 }
 
 async fn fetch_rating_stats(
@@ -418,14 +432,16 @@ async fn fetch_rating_stats_map(
     persistence: &RulePersistence,
     rule_ids: &[String],
 ) -> HashMap<String, RuleRatingStats> {
-    let uuids: Vec<uuid::Uuid> = rule_ids
+    // 同一个 rule_id 可能映射到多份请求里（理论上不会但稳一点），用 vec 保 1:1。
+    let pairs: Vec<(String, uuid::Uuid)> = rule_ids
         .iter()
-        .filter_map(|id| extract_rule_uuid(id).ok())
+        .filter_map(|id| extract_rule_uuid(id).ok().map(|u| (id.clone(), u)))
         .collect();
     let mut map = HashMap::new();
-    if uuids.is_empty() {
+    if pairs.is_empty() {
         return map;
     }
+    let uuids: Vec<uuid::Uuid> = pairs.iter().map(|(_, u)| *u).collect();
     let rows = match sqlx::query(
         r#"
         SELECT
@@ -447,14 +463,25 @@ async fn fetch_rating_stats_map(
             return map;
         }
     };
+    // uuid → 原始 rule_id（可能多个 rule_id 映射到同一 uuid 的情况理论上有但不合理，
+    // 这里 last-wins 足够）。
+    let mut by_uuid: HashMap<uuid::Uuid, String> = HashMap::with_capacity(pairs.len());
+    for (rule_id, uuid) in pairs {
+        by_uuid.insert(uuid, rule_id);
+    }
     for row in rows {
         let uuid_str: String = row.get("rule_id");
+        let Ok(uuid) = uuid::Uuid::parse_str(&uuid_str) else {
+            continue;
+        };
+        let Some(rule_id) = by_uuid.get(&uuid).cloned() else {
+            continue;
+        };
         let stats = RuleRatingStats {
             average: row.get::<f32, _>("avg"),
             count: row.get::<i32, _>("cnt") as u32,
         };
-        // 内存里 published rule.id 是带 "rule_" 前缀的形式
-        map.insert(format!("rule_{uuid_str}"), stats);
+        map.insert(rule_id, stats);
     }
     map
 }
@@ -640,4 +667,47 @@ pub async fn upload_review_image(
     Ok(Json(ApiResponse::success(UploadedImageResponse {
         image_url: format!("/static/review-images/{filename}"),
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_rule_uuid;
+
+    #[test]
+    fn extract_rule_uuid_accepts_user_rule_format() {
+        let id = "rule_550e8400-e29b-41d4-a716-446655440000";
+        let uuid = extract_rule_uuid(id).expect("rule_<uuid> 应正常解析");
+        assert_eq!(uuid.to_string(), "550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    #[test]
+    fn extract_rule_uuid_accepts_bare_uuid() {
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let uuid = extract_rule_uuid(id).expect("裸 uuid 也应正常解析");
+        assert_eq!(uuid.to_string(), "550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    #[test]
+    fn extract_rule_uuid_derives_stable_v5_for_builtin_ids() {
+        // builtin id 没有 rule_ 前缀也不是 uuid，应走 v5 派生。
+        let a1 = extract_rule_uuid("builtin-bigtwo-rule").unwrap();
+        let a2 = extract_rule_uuid("builtin-bigtwo-rule").unwrap();
+        assert_eq!(a1, a2, "同一 id 必须派生出相同 uuid（确定性）");
+        assert_eq!(a1.get_version_num(), 5, "应是 v5");
+
+        // 不同 id 必须派生出不同 uuid。
+        let b = extract_rule_uuid("builtin-war-rule").unwrap();
+        assert_ne!(a1, b);
+        let c = extract_rule_uuid("party").unwrap();
+        assert_ne!(a1, c);
+        assert_ne!(b, c);
+    }
+
+    #[test]
+    fn extract_rule_uuid_never_returns_err_after_v5_fallback() {
+        // 任意杂字符串都应能映射出一个 uuid，而不是返回 InvalidInput。
+        assert!(extract_rule_uuid("anything-goes").is_ok());
+        assert!(extract_rule_uuid("").is_ok());
+        assert!(extract_rule_uuid("中文 ID 也行").is_ok());
+    }
 }
