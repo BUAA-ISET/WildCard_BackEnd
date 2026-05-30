@@ -20,9 +20,12 @@ CREATE TABLE IF NOT EXISTS rule_drafts (
     status VARCHAR(32) NOT NULL DEFAULT 'draft',
     design JSONB NOT NULL,
     published_rule_id VARCHAR(128),
+    forked_from_rule_id VARCHAR(128),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE rule_drafts ADD COLUMN IF NOT EXISTS forked_from_rule_id VARCHAR(128);
 
 CREATE INDEX IF NOT EXISTS idx_rule_drafts_owner_updated
     ON rule_drafts(owner_id, updated_at DESC);

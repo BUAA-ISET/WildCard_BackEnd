@@ -161,6 +161,10 @@ async fn main() {
             post(market::create_review),
         )
         .route(
+            "/api/rules/published/{rule_id}/fork",
+            post(rule::fork_published_rule),
+        )
+        .route(
             "/api/rules/developers/{developer_id}/rules",
             get(market::list_developer_rules),
         )
