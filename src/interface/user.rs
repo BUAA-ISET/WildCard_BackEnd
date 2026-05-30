@@ -534,7 +534,7 @@ pub async fn update_email(
 
 const AVATAR_MAX_BYTES: usize = 2 * 1024 * 1024;
 
-fn extension_for_mime(mime: &str) -> Option<&'static str> {
+pub fn extension_for_mime(mime: &str) -> Option<&'static str> {
     match mime {
         "image/png" => Some("png"),
         "image/jpeg" | "image/jpg" => Some("jpg"),

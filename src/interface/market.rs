@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -12,7 +12,8 @@ use crate::error::AppError;
 use crate::infrastructure::user::UserRepository;
 use crate::interface::auth::TokenClaims;
 use crate::interface::rule::{ApiResponse, RulePersistence};
-use crate::state::{RoomStore, RuleStore};
+use crate::interface::user::extension_for_mime;
+use crate::state::{RoomStore, RuleStore, UploadDir};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MarketDeveloper {
@@ -529,6 +530,13 @@ pub async fn create_review(
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
+    if let Some(url) = image_url.as_ref()
+        && url.len() > 512
+    {
+        return Err(AppError::InvalidInput(
+            "图片地址过长，请先调用图片上传接口拿到短 URL".to_string(),
+        ));
+    }
 
     sqlx::query(
         r#"
@@ -575,4 +583,61 @@ fn now_millis() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+const REVIEW_IMAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadedImageResponse {
+    pub image_url: String,
+}
+
+/// 接收 multipart 文件，落盘到 uploads/review-images/，返回短 URL。
+/// 前端用这个 URL 再发给 POST /reviews 的 imageUrl 字段。
+#[tracing::instrument(skip(multipart, upload_dir))]
+pub async fn upload_review_image(
+    TokenClaims { user_id: _, .. }: TokenClaims,
+    State(upload_dir): State<UploadDir>,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<UploadedImageResponse>>, AppError> {
+    let mut field = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("解析上传失败：{e}")))?
+        .ok_or_else(|| AppError::InvalidInput("缺少上传文件".to_string()))?;
+
+    let content_type = field.content_type().map(str::to_string).unwrap_or_default();
+    let extension = extension_for_mime(&content_type)
+        .ok_or_else(|| AppError::InvalidInput("仅支持 png / jpeg / webp 格式".to_string()))?;
+
+    let mut bytes = Vec::with_capacity(16 * 1024);
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("读取上传内容失败：{e}")))?
+    {
+        if bytes.len() + chunk.len() > REVIEW_IMAGE_MAX_BYTES {
+            return Err(AppError::InvalidInput("评论图片不能超过 2MB".to_string()));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.is_empty() {
+        return Err(AppError::InvalidInput("上传文件为空".to_string()));
+    }
+
+    let dir = upload_dir.0.join("review-images");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("创建上传目录失败：{e}")))?;
+
+    let filename = format!("{}.{extension}", uuid::Uuid::new_v4());
+    let path = dir.join(&filename);
+    tokio::fs::write(&path, &bytes)
+        .await
+        .map_err(|e| AppError::InvalidInput(format!("写入文件失败：{e}")))?;
+
+    Ok(Json(ApiResponse::success(UploadedImageResponse {
+        image_url: format!("/static/review-images/{filename}"),
+    })))
 }
