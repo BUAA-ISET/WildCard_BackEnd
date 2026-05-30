@@ -173,6 +173,8 @@ pub struct RuleDraftSummary {
     pub updated_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub published_rule_id: Option<String>,
+    #[serde(rename = "rejectReason", skip_serializing_if = "Option::is_none")]
+    pub reject_reason: Option<String>,
 }
 
 pub async fn list_drafts(
@@ -192,6 +194,7 @@ pub async fn list_drafts(
             status: draft.status,
             updated_at: draft.updated_at,
             published_rule_id: draft.published_rule_id.clone(),
+            reject_reason: draft.reject_reason.clone(),
         })
         .collect::<Vec<_>>();
 
@@ -309,6 +312,7 @@ pub async fn delete_draft(
         status: draft.status,
         updated_at: draft.updated_at,
         published_rule_id: draft.published_rule_id.clone(),
+        reject_reason: draft.reject_reason.clone(),
     };
     let published_rule_id = draft.published_rule_id.clone();
 
