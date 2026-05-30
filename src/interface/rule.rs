@@ -61,6 +61,8 @@ pub struct RuleDraft {
     pub updated_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub published_rule_id: Option<String>,
+    #[serde(rename = "forkedFromRuleId", skip_serializing_if = "Option::is_none")]
+    pub forked_from_rule_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -188,6 +190,7 @@ pub async fn save_draft(
         created_at: now,
         updated_at: now,
         published_rule_id: None,
+        forked_from_rule_id: None,
     };
     let response = SaveDraftResponse {
         id: draft.id.clone(),
@@ -335,6 +338,84 @@ pub async fn publish_draft(
     })))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ForkRuleRequest {
+    pub name: String,
+}
+
+const FORK_NAME_MAX_LEN: usize = 255;
+
+/// 校验 / 兜底 fork 草稿名称：
+/// - 去首尾空白
+/// - 空 → "{原名} (副本)"
+/// - 超长 → 拒
+pub fn resolve_fork_name(raw: &str, source_name: &str) -> Result<String, AppError> {
+    let trimmed = raw.trim();
+    let name = if trimmed.is_empty() {
+        format!("{source_name} (副本)")
+    } else {
+        trimmed.to_string()
+    };
+    if name.chars().count() > FORK_NAME_MAX_LEN {
+        return Err(AppError::InvalidInput(format!(
+            "草稿名称不能超过 {FORK_NAME_MAX_LEN} 字符"
+        )));
+    }
+    Ok(name)
+}
+
+/// 把已发布规则的关键字段克隆到一个新的 RuleDraft 上。
+/// 抽成纯函数，方便单测覆盖：design 完整复制、forked_from_rule_id 正确。
+pub fn build_forked_draft(rule: &PublishedRule, user_id: &Uuid, name: String) -> RuleDraft {
+    let now = now_millis();
+    RuleDraft {
+        id: uuid::Uuid::new_v4().to_string(),
+        owner_id: user_id.to_string(),
+        name,
+        player_count: rule.player_count,
+        description: rule.description.clone(),
+        status: RuleStatus::Draft,
+        design: rule.design.clone(),
+        created_at: now,
+        updated_at: now,
+        published_rule_id: None,
+        forked_from_rule_id: Some(rule.id.clone()),
+    }
+}
+
+pub async fn fork_published_rule(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(store): State<RuleStore>,
+    State(persistence): State<RulePersistence>,
+    Path(rule_id): Path<String>,
+    Json(payload): Json<ForkRuleRequest>,
+) -> Result<Json<ApiResponse<SaveDraftResponse>>, AppError> {
+    // 1. 拿到源规则，复制必要字段后立刻释放读锁，避免 save_draft 期间长时间占用。
+    let source = {
+        let guard = store.read().await;
+        guard
+            .published
+            .get(&rule_id)
+            .cloned()
+            .ok_or(AppError::NotFound)?
+    };
+
+    // 2. 校验/兜底名称。
+    let name = resolve_fork_name(&payload.name, &source.name)?;
+
+    let draft = build_forked_draft(&source, &user_id.0, name);
+    let response = SaveDraftResponse {
+        id: draft.id.clone(),
+        status: draft.status.clone(),
+        updated_at: draft.updated_at,
+    };
+
+    persistence.save_draft(&draft).await?;
+    store.write().await.drafts.insert(draft.id.clone(), draft);
+
+    Ok(Json(ApiResponse::success(response)))
+}
+
 pub async fn rule_options(
     State(store): State<RuleStore>,
 ) -> Result<Json<ApiResponse<Vec<RuleOption>>>, AppError> {
@@ -372,9 +453,21 @@ impl RulePersistence {
                 status VARCHAR(32) NOT NULL DEFAULT 'draft',
                 design JSONB NOT NULL,
                 published_rule_id VARCHAR(128),
+                forked_from_rule_id VARCHAR(128),
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        // 老库升级：保证 fork 字段存在（Postgres 9.6+ 支持 IF NOT EXISTS）。
+        sqlx::query(
+            r#"
+            ALTER TABLE rule_drafts
+                ADD COLUMN IF NOT EXISTS forked_from_rule_id VARCHAR(128)
             "#,
         )
         .execute(&self.pool)
@@ -436,6 +529,7 @@ impl RulePersistence {
                 status,
                 design,
                 published_rule_id,
+                forked_from_rule_id,
                 (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_at,
                 (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_at
             FROM rule_drafts
@@ -465,6 +559,7 @@ impl RulePersistence {
                 created_at: row.get("created_at"),
                 updated_at: row.get("updated_at"),
                 published_rule_id: row.get("published_rule_id"),
+                forked_from_rule_id: row.get("forked_from_rule_id"),
             };
             repository.drafts.insert(draft.id.clone(), draft);
         }
@@ -539,12 +634,12 @@ impl RulePersistence {
             r#"
             INSERT INTO rule_drafts (
                 id, owner_id, name, player_count, description, status, design,
-                published_rule_id, created_at, updated_at
+                published_rule_id, forked_from_rule_id, created_at, updated_at
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8,
-                to_timestamp($9::double precision / 1000.0),
-                to_timestamp($10::double precision / 1000.0)
+                $1, $2, $3, $4, $5, $6, $7, $8, $9,
+                to_timestamp($10::double precision / 1000.0),
+                to_timestamp($11::double precision / 1000.0)
             )
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -553,6 +648,7 @@ impl RulePersistence {
                 status = EXCLUDED.status,
                 design = EXCLUDED.design,
                 published_rule_id = EXCLUDED.published_rule_id,
+                forked_from_rule_id = EXCLUDED.forked_from_rule_id,
                 updated_at = EXCLUDED.updated_at
             "#,
         )
@@ -564,6 +660,7 @@ impl RulePersistence {
         .bind(status)
         .bind(design)
         .bind(&draft.published_rule_id)
+        .bind(&draft.forked_from_rule_id)
         .bind(draft.created_at)
         .bind(draft.updated_at)
         .execute(&self.pool)
@@ -856,4 +953,101 @@ fn builtin_rule_sort_key(rule_id: &str) -> (u8, &str) {
         .map(|idx| idx as u8)
         .unwrap_or(u8::MAX);
     (order, rule_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_published_rule(id: &str, name: &str) -> PublishedRule {
+        // 复用 builtin 资产里第一份能跑通的设计，保证 design 完整且能解析。
+        let builtins = build_builtin_rules();
+        let source = builtins
+            .into_iter()
+            .next()
+            .expect("至少需要一份内置规则才能跑这条测试（test2.json）");
+        PublishedRule {
+            id: id.to_string(),
+            owner_id: "system".to_string(),
+            name: name.to_string(),
+            player_count: source.player_count,
+            description: "fork 测试用的源规则".to_string(),
+            version: 1,
+            design: source.design.clone(),
+            runtime: source.runtime,
+            created_at: source.created_at,
+            updated_at: source.updated_at,
+        }
+    }
+
+    #[test]
+    fn fork_request_deserializes_minimal_payload() {
+        let req: ForkRuleRequest = serde_json::from_str(r#"{"name":"我的副本"}"#).unwrap();
+        assert_eq!(req.name, "我的副本");
+    }
+
+    #[test]
+    fn build_forked_draft_copies_design_and_records_source() {
+        let rule = sample_published_rule("builtin-war-rule", "War 拼点战争");
+        let user = Uuid::new_v4();
+
+        let draft = build_forked_draft(&rule, &user, "我的战争副本".to_string());
+
+        assert_eq!(draft.name, "我的战争副本");
+        assert_eq!(draft.owner_id, user.to_string());
+        assert_eq!(draft.player_count, rule.player_count);
+        assert_eq!(draft.description, rule.description);
+        assert!(matches!(draft.status, RuleStatus::Draft));
+        assert_eq!(draft.published_rule_id, None);
+        assert_eq!(
+            draft.forked_from_rule_id.as_deref(),
+            Some("builtin-war-rule")
+        );
+        // design 必须是完整克隆而不是丢字段——用 serde_json 等价对比最稳。
+        let original_json = serde_json::to_value(&rule.design).unwrap();
+        let forked_json = serde_json::to_value(&draft.design).unwrap();
+        assert_eq!(original_json, forked_json);
+    }
+
+    #[test]
+    fn build_forked_draft_preserves_user_uuid_with_uuid_rule_id() {
+        // rule_id 是 "rule_<uuid>" 风格时也要原样保留，不做 UUID 转换。
+        let mut rule = sample_published_rule("rule_abc123", "用户规则");
+        rule.id = "rule_550e8400-e29b-41d4-a716-446655440000".to_string();
+        let user = Uuid::new_v4();
+
+        let draft = build_forked_draft(&rule, &user, "副本".to_string());
+
+        assert_eq!(
+            draft.forked_from_rule_id.as_deref(),
+            Some("rule_550e8400-e29b-41d4-a716-446655440000")
+        );
+    }
+
+    #[test]
+    fn resolve_fork_name_falls_back_to_copy_suffix_when_empty() {
+        assert_eq!(
+            resolve_fork_name("", "War 拼点战争").unwrap(),
+            "War 拼点战争 (副本)"
+        );
+        assert_eq!(
+            resolve_fork_name("   ", "Tiny Demo").unwrap(),
+            "Tiny Demo (副本)"
+        );
+    }
+
+    #[test]
+    fn resolve_fork_name_trims_user_input() {
+        assert_eq!(resolve_fork_name("  我的副本  ", "源").unwrap(), "我的副本");
+    }
+
+    #[test]
+    fn resolve_fork_name_rejects_overlong_name() {
+        let too_long: String = "字".repeat(FORK_NAME_MAX_LEN + 1);
+        let err = resolve_fork_name(&too_long, "源").unwrap_err();
+        assert!(
+            matches!(err, AppError::InvalidInput(ref msg) if msg.contains(&FORK_NAME_MAX_LEN.to_string())),
+            "expected InvalidInput mentioning the limit, got {err:?}"
+        );
+    }
 }
