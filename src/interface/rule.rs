@@ -528,6 +528,15 @@ pub struct PendingDraftSummary {
     #[serde(rename = "updatedAt")]
     pub updated_at: i64,
     pub design: ExportedRuleDesign,
+    /// 长文介绍 / 更新日志，审核员需要读这个判断内容是否合规。
+    #[serde(default)]
+    pub introduction: String,
+    /// 封面图短 URL（/static/rule-images/...）。
+    #[serde(default, rename = "coverUrl")]
+    pub cover_url: String,
+    /// 截图短 URL 数组，最多 10 张。
+    #[serde(default, rename = "screenshotUrls")]
+    pub screenshot_urls: Vec<String>,
 }
 
 pub async fn list_pending_reviews(
@@ -577,6 +586,9 @@ pub async fn list_pending_reviews(
             description: draft.description.clone(),
             updated_at: draft.updated_at,
             design: draft.design.clone(),
+            introduction: draft.introduction.clone(),
+            cover_url: draft.cover_url.clone(),
+            screenshot_urls: draft.screenshot_urls.clone(),
         });
     }
     // 早提交的排前面，让审核员按 FIFO 处理。
