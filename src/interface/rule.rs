@@ -2093,4 +2093,72 @@ mod tests {
         assert_eq!(published.cover_url, draft.cover_url);
         assert_eq!(published.screenshot_urls, draft.screenshot_urls);
     }
+
+    #[test]
+    fn pending_draft_summary_serializes_meta_fields_for_admin_review_list() {
+        let summary = PendingDraftSummary {
+            draft_id: "draft-1".to_string(),
+            name: "待审规则".to_string(),
+            owner_id: "owner-1".to_string(),
+            owner_name: "Alice".to_string(),
+            player_count: 2,
+            description: "简介".to_string(),
+            updated_at: 123,
+            design: sample_published_rule("x", "x").design,
+            introduction: "审核员应能看到的长介绍".to_string(),
+            cover_url: "/static/rule-images/cover.png".to_string(),
+            screenshot_urls: vec!["/static/rule-images/shot.png".to_string()],
+        };
+
+        let json = serde_json::to_value(summary).unwrap();
+        assert_eq!(
+            json.get("draftId").and_then(|v| v.as_str()),
+            Some("draft-1")
+        );
+        assert_eq!(
+            json.get("ownerName").and_then(|v| v.as_str()),
+            Some("Alice")
+        );
+        assert_eq!(
+            json.get("introduction").and_then(|v| v.as_str()),
+            Some("审核员应能看到的长介绍")
+        );
+        assert_eq!(
+            json.get("coverUrl").and_then(|v| v.as_str()),
+            Some("/static/rule-images/cover.png")
+        );
+        assert_eq!(
+            json.get("screenshotUrls")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|v| v.as_str()),
+            Some("/static/rule-images/shot.png")
+        );
+    }
+
+    #[test]
+    fn admin_preview_rule_draft_json_contains_status_design_and_meta() {
+        let mut draft = meta_test_draft(
+            "预览介绍",
+            "/static/rule-images/cover.png",
+            vec!["/static/rule-images/shot.png".to_string()],
+        );
+        draft.status = RuleStatus::PendingReview;
+        draft.reject_reason = Some("曾被驳回".to_string());
+
+        let json = serde_json::to_value(draft).unwrap();
+        assert_eq!(
+            json.get("status").and_then(|v| v.as_str()),
+            Some("pendingReview")
+        );
+        assert_eq!(
+            json.get("rejectReason").and_then(|v| v.as_str()),
+            Some("曾被驳回")
+        );
+        assert!(json.get("design").is_some());
+        assert_eq!(
+            json.get("coverUrl").and_then(|v| v.as_str()),
+            Some("/static/rule-images/cover.png")
+        );
+    }
 }

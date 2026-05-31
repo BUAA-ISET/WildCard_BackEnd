@@ -720,7 +720,9 @@ pub async fn password_reset(
 
 #[cfg(test)]
 mod tests {
-    use super::{extension_for_mime, looks_like_email, validate_login_account};
+    use super::{UserDto, extension_for_mime, looks_like_email, validate_login_account};
+    use crate::domain::user::{User, UserId};
+    use uuid::Uuid;
 
     #[test]
     fn looks_like_email_detects_at_symbol() {
@@ -778,5 +780,44 @@ mod tests {
         }
         // 50 个调用拿到 50 个全相同结果的概率是 (1/10^6)^49，实际上一定不会发生
         assert!(codes.len() > 1, "generate_code 应该返回随机序列");
+    }
+
+    #[test]
+    fn user_dto_from_user_preserves_role_for_admin_gating() {
+        let user = User {
+            id: UserId(Uuid::new_v4()),
+            name: "Admin".to_string(),
+            email: "admin@example.com".to_string(),
+            password: "hashed".to_string(),
+            avatar: "/avatar.png".to_string(),
+            role: "admin".to_string(),
+        };
+
+        let dto = UserDto::from_user(user);
+
+        assert_eq!(dto.username, "Admin");
+        assert_eq!(dto.role, "admin");
+        assert!(dto.token.is_none());
+    }
+
+    #[test]
+    fn user_dto_with_token_serializes_role_and_token_together() {
+        let user = User {
+            id: UserId(Uuid::new_v4()),
+            name: "Admin".to_string(),
+            email: "admin@example.com".to_string(),
+            password: "hashed".to_string(),
+            avatar: "/avatar.png".to_string(),
+            role: "admin".to_string(),
+        };
+
+        let dto = UserDto::from_user_with_token(user, "jwt-token".to_string());
+        let json = serde_json::to_value(dto).unwrap();
+
+        assert_eq!(json.get("role").and_then(|v| v.as_str()), Some("admin"));
+        assert_eq!(
+            json.get("token").and_then(|v| v.as_str()),
+            Some("jwt-token")
+        );
     }
 }

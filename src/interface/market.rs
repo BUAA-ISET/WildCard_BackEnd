@@ -686,7 +686,7 @@ pub async fn upload_review_image(
 
 #[cfg(test)]
 mod tests {
-    use super::extract_rule_uuid;
+    use super::{CreateReviewRequest, UploadedImageResponse, extract_rule_uuid};
 
     #[test]
     fn extract_rule_uuid_accepts_user_rule_format() {
@@ -724,5 +724,43 @@ mod tests {
         assert!(extract_rule_uuid("anything-goes").is_ok());
         assert!(extract_rule_uuid("").is_ok());
         assert!(extract_rule_uuid("中文 ID 也行").is_ok());
+    }
+
+    #[test]
+    fn create_review_request_deserializes_camel_case_image_url() {
+        let req: CreateReviewRequest = serde_json::from_str(
+            r#"{"rating":5,"content":"带图评论","imageUrl":"/static/review-images/r.png"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(req.rating, 5);
+        assert_eq!(req.content, "带图评论");
+        assert_eq!(
+            req.image_url.as_deref(),
+            Some("/static/review-images/r.png")
+        );
+    }
+
+    #[test]
+    fn create_review_request_defaults_optional_content_and_image_url() {
+        let req: CreateReviewRequest = serde_json::from_str(r#"{"rating":4}"#).unwrap();
+
+        assert_eq!(req.rating, 4);
+        assert_eq!(req.content, "");
+        assert!(req.image_url.is_none());
+    }
+
+    #[test]
+    fn uploaded_image_response_serializes_short_url_as_camel_case() {
+        let response = UploadedImageResponse {
+            image_url: "/static/review-images/r.png".to_string(),
+        };
+        let json = serde_json::to_value(response).unwrap();
+
+        assert_eq!(
+            json.get("imageUrl").and_then(|v| v.as_str()),
+            Some("/static/review-images/r.png")
+        );
+        assert!(json.get("image_url").is_none());
     }
 }
