@@ -158,6 +158,10 @@ async fn main() {
         )
         .route("/api/admin/rules/pending", get(rule::list_pending_reviews))
         .route(
+            "/api/admin/rules/drafts/{draft_id}",
+            get(rule::admin_get_draft),
+        )
+        .route(
             "/api/admin/rules/{draft_id}/approve",
             post(rule::approve_draft),
         )

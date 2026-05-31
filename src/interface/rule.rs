@@ -596,6 +596,22 @@ pub async fn list_pending_reviews(
     Ok(Json(ApiResponse::success(out)))
 }
 
+/// 管理员可视化预览：拿到任意作者的草稿完整内容（含 design / meta），
+/// 与 `get_draft` 区别是不强制 owner，只要求 admin 身份；FE 用这个走 readonly
+/// 模式打开 RuleBuilder 渲染同一画布。
+pub async fn admin_get_draft(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(store): State<RuleStore>,
+    State(user_repo): State<Arc<UserRepository>>,
+    Path(draft_id): Path<String>,
+) -> Result<Json<ApiResponse<RuleDraft>>, AppError> {
+    ensure_admin(&user_id, &user_repo).await?;
+
+    let guard = store.read().await;
+    let draft = guard.drafts.get(&draft_id).ok_or(AppError::NotFound)?;
+    Ok(Json(ApiResponse::success(draft.clone())))
+}
+
 pub async fn approve_draft(
     TokenClaims { user_id, .. }: TokenClaims,
     State(store): State<RuleStore>,
