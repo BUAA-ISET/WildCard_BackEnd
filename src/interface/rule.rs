@@ -2161,4 +2161,43 @@ mod tests {
             Some("/static/rule-images/cover.png")
         );
     }
+
+    #[test]
+    fn rule_draft_summary_skips_reject_reason_when_none_and_serializes_when_present() {
+        // 普通 draft / pending / published 状态下应该 skip 序列化（FE 收到不含字段）；
+        // rejected 状态下 reject_reason 必须能被 FE 读到，否则审核驳回原因展示不了。
+        let mut summary = RuleDraftSummary {
+            id: "draft-1".to_string(),
+            name: "测试规则".to_string(),
+            player_count: 2,
+            description: String::new(),
+            status: RuleStatus::Draft,
+            updated_at: 1,
+            published_rule_id: None,
+            reject_reason: None,
+            introduction: String::new(),
+            cover_url: String::new(),
+            screenshot_urls: vec![],
+        };
+
+        let json = serde_json::to_value(&summary).unwrap();
+        assert!(
+            json.get("rejectReason").is_none(),
+            "草稿没有驳回原因时不应该写出 rejectReason 字段"
+        );
+
+        summary.status = RuleStatus::Rejected;
+        summary.reject_reason = Some("不符合社区规范".to_string());
+        let json = serde_json::to_value(&summary).unwrap();
+        assert_eq!(
+            json.get("rejectReason").and_then(|v| v.as_str()),
+            Some("不符合社区规范"),
+            "rejected 时审核员的驳回原因必须能被序列化给 FE 展示"
+        );
+        assert_eq!(
+            json.get("status").and_then(|v| v.as_str()),
+            Some("rejected"),
+            "四态 enum 应该序列化为 camelCase"
+        );
+    }
 }
