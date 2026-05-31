@@ -40,6 +40,7 @@ pub struct UserDto {
     pub username: String,
     pub email: String,
     pub avatar: String,
+    pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
 }
@@ -51,6 +52,7 @@ impl UserDto {
             username: user.name,
             email: user.email,
             avatar: user.avatar,
+            role: user.role,
             token: None,
         }
     }
