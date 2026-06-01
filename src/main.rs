@@ -72,6 +72,12 @@ async fn main() {
     // Connect to postgres database.
     let pool = PgPool::connect_lazy(&database_url).expect("Failed to connect to the database");
 
+    let replay_persistence = replay::ReplayPersistence { pool: pool.clone() };
+    replay_persistence
+        .ensure_schema()
+        .await
+        .expect("Failed to initialize replay store");
+
     let state = GlobalState {
         jwt_secret: JwtSecret(secret_key.into_bytes()),
         user: Arc::new(UserRepository { pool: pool.clone() }),
@@ -83,6 +89,7 @@ async fn main() {
             .expect("Failed to initialize rule store"),
         rooms: room::build_room_store(),
         replays: replay::build_replay_store(),
+        replay_persistence,
         email: crate::infrastructure::email::EmailSender::from_env(),
         upload_dir: crate::state::UploadDir::from_env(),
     };

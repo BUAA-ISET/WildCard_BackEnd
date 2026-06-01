@@ -63,6 +63,22 @@ ALTER TABLE rule_published ADD COLUMN IF NOT EXISTS screenshot_urls JSONB NOT NU
 CREATE INDEX IF NOT EXISTS idx_rule_published_owner_updated
     ON rule_published(owner_id, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS match_replays (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    room_code TEXT NOT NULL,
+    player_ids TEXT[] NOT NULL,
+    replay JSONB NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_match_replays_player_ids
+    ON match_replays USING GIN(player_ids);
+
+CREATE INDEX IF NOT EXISTS idx_match_replays_updated
+    ON match_replays(updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS rule_reviews (
     id UUID PRIMARY KEY,
     rule_id UUID NOT NULL,

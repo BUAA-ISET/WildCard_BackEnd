@@ -15,7 +15,10 @@ use crate::{
     infrastructure::user::UserRepository,
     interface::{
         auth::TokenClaims,
-        replay::{ReplayStore, append_match_replay_frame, start_match_replay},
+        replay::{
+            ReplayPersistence, ReplayStore, append_match_replay_frame_with_persistence,
+            start_match_replay_with_persistence,
+        },
         user::ApiResponse,
     },
     state::{RoomStore, RuleStore},
@@ -317,6 +320,7 @@ pub async fn start_game(
     State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
     State(replay_store): State<ReplayStore>,
+    State(replay_persistence): State<ReplayPersistence>,
 ) -> Result<Json<ApiResponse<Room>>, AppError> {
     let player_id = user_id.to_string();
     let mut room_guard = room_store.write().await;
@@ -361,7 +365,13 @@ pub async fn start_game(
         room.game_session_id = Some(session_id.clone());
         public_room(room)
     };
-    start_match_replay(&replay_store, &session, &room_snapshot).await;
+    start_match_replay_with_persistence(
+        &replay_store,
+        Some(&replay_persistence),
+        &session,
+        &room_snapshot,
+    )
+    .await;
     room_guard.sessions.insert(session_id, session);
 
     Ok(Json(ApiResponse::success(room_snapshot)))
@@ -470,6 +480,7 @@ pub async fn play_cards(
     State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
     State(replay_store): State<ReplayStore>,
+    State(replay_persistence): State<ReplayPersistence>,
     Path((session_id, action_id)): Path<(String, String)>,
     Json(payload): Json<PlayerActionInput>,
 ) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
@@ -478,6 +489,7 @@ pub async fn play_cards(
         rule_store,
         room_store,
         replay_store,
+        replay_persistence,
         session_id,
         action_id,
         payload,
@@ -490,6 +502,7 @@ pub async fn skip_action(
     State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
     State(replay_store): State<ReplayStore>,
+    State(replay_persistence): State<ReplayPersistence>,
     Path((session_id, action_id)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
     submit_game_action(
@@ -497,6 +510,7 @@ pub async fn skip_action(
         rule_store,
         room_store,
         replay_store,
+        replay_persistence,
         session_id,
         action_id,
         PlayerActionInput {
@@ -512,6 +526,7 @@ pub async fn choose_action(
     State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
     State(replay_store): State<ReplayStore>,
+    State(replay_persistence): State<ReplayPersistence>,
     Path((session_id, action_id)): Path<(String, String)>,
     Json(payload): Json<PlayerActionInput>,
 ) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
@@ -520,6 +535,7 @@ pub async fn choose_action(
         rule_store,
         room_store,
         replay_store,
+        replay_persistence,
         session_id,
         action_id,
         payload,
@@ -532,6 +548,7 @@ async fn submit_game_action(
     rule_store: RuleStore,
     room_store: RoomStore,
     replay_store: ReplayStore,
+    replay_persistence: ReplayPersistence,
     session_id: String,
     action_id: String,
     payload: PlayerActionInput,
@@ -571,7 +588,13 @@ async fn submit_game_action(
     };
 
     let room_before_reset = room_guard.rooms.get(&room_code).cloned();
-    append_match_replay_frame(&replay_store, &session_snapshot, room_before_reset.as_ref()).await;
+    append_match_replay_frame_with_persistence(
+        &replay_store,
+        Some(&replay_persistence),
+        &session_snapshot,
+        room_before_reset.as_ref(),
+    )
+    .await;
 
     if session_snapshot.status == "finished" && let Some(room) = room_guard.rooms.get_mut(&room_code) {
         reset_room_after_game(room);

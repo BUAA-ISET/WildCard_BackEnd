@@ -1376,24 +1376,6 @@ fn read_id_as_string(row: &PgRow, column: &str) -> Result<String, AppError> {
         .map_err(AppError::DatabaseError)
 }
 
-fn read_optional_id_as_string(row: &PgRow, column: &str) -> Result<Option<String>, AppError> {
-    row.try_get::<Option<String>, _>(column)
-        .or_else(|_| {
-            row.try_get::<Option<Uuid>, _>(column)
-                .map(|id| id.map(|id| id.to_string()))
-        })
-        .map_err(AppError::DatabaseError)
-}
-
-fn read_timestamp_millis(row: &PgRow, column: &str) -> Result<i64, AppError> {
-    row.try_get::<i64, _>(column)
-        .or_else(|_| {
-            row.try_get::<time::OffsetDateTime, _>(column)
-                .map(|value| value.unix_timestamp_nanos() as i64 / 1_000_000)
-        })
-        .map_err(AppError::DatabaseError)
-}
-
 #[allow(dead_code)]
 fn build_builtin_test_rule() -> Option<PublishedRule> {
     let rule_path = concat!(env!("CARGO_MANIFEST_DIR"), "\\test.json");
