@@ -2650,6 +2650,44 @@ fn shuffle_deck(session: &mut GameSession) {
 mod tests {
     use super::*;
 
+    /// 通用工具：清空 session 中所有手牌与牌堆，按 mapping 依据“点数”精确补回
+    /// 给每个 player；剩余牌回到 session.deck，并刷新 player.手牌数。
+    /// 测试需要确定性的手牌组合，不能依赖自然发牌（HashMap 迭代顺序不定）。
+    fn force_hands(session: &mut GameSession, mapping: &[(&str, &[i64])]) {
+        let mut pool: Vec<GameCard> = Vec::new();
+        pool.append(&mut session.deck);
+        for hand in session.hands.values_mut() {
+            pool.append(hand);
+        }
+        pool.append(&mut session.discard_pile);
+
+        fn take_by_point(pool: &mut Vec<GameCard>, point: i64) -> GameCard {
+            let pos = pool
+                .iter()
+                .position(|card| card.properties.get("点数").copied().unwrap_or_default() == point)
+                .unwrap_or_else(|| panic!("pool exhausted for point {point}"));
+            pool.remove(pos)
+        }
+
+        for (player_id, points) in mapping {
+            let hand: Vec<GameCard> = points
+                .iter()
+                .map(|p| take_by_point(&mut pool, *p))
+                .collect();
+            session.hands.insert((*player_id).to_string(), hand);
+        }
+        session.deck = pool;
+
+        for player in &mut session.players {
+            let count = session
+                .hands
+                .get(&player.id)
+                .map(Vec::len)
+                .unwrap_or_default() as i64;
+            player.properties.insert("手牌数".to_string(), count);
+        }
+    }
+
     fn load_tiny_demo_rule() -> RuntimeRule {
         let content = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test2.json"),
@@ -2705,6 +2743,988 @@ mod tests {
         assert_eq!(session.status, "finished");
         assert!(session.pending_action.is_none());
         assert_eq!(session.settlement_results.get("player-a"), Some(&1));
+        assert_eq!(session.settlement_results.get("player-b"), Some(&0));
+    }
+
+    fn load_war_rule() -> RuntimeRule {
+        let content = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("war.json"),
+        )
+        .expect("war.json should exist");
+        let design: ExportedRuleDesign =
+            serde_json::from_str(&content).expect("war.json should be valid rule json");
+
+        RuleEngine::parse(
+            "War 拼点战争".to_string(),
+            2,
+            "5 轮翻牌比大小".to_string(),
+            design,
+        )
+        .expect("war rule should compile")
+    }
+
+    fn pick_card_id(session: &GameSession, player_id: &str, hand_index: usize) -> String {
+        session
+            .hands
+            .get(player_id)
+            .and_then(|cards| cards.get(hand_index))
+            .map(|card| card.id.clone())
+            .unwrap_or_else(|| panic!("player {player_id} should have card at index {hand_index}"))
+    }
+
+    fn card_point(session: &GameSession, player_id: &str, card_id: &str) -> i64 {
+        session
+            .hands
+            .get(player_id)
+            .and_then(|cards| cards.iter().find(|card| card.id == card_id))
+            .and_then(|card| card.properties.get("点数").copied())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn simulate_war_full_match() {
+        let runtime_rule = load_war_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-war".to_string(), &runtime_rule, player_ids.clone())
+                .expect("war session should start");
+
+        // 每人开局发到 5 张牌。
+        assert_eq!(session.hands.get("player-a").map(Vec::len), Some(5));
+        assert_eq!(session.hands.get("player-b").map(Vec::len), Some(5));
+
+        let mut expected_p0_wins: i64 = 0;
+        let mut expected_p1_wins: i64 = 0;
+
+        for round in 0..5 {
+            // 轮到玩家 A 出牌。
+            let pending = session
+                .pending_action
+                .clone()
+                .unwrap_or_else(|| panic!("round {round}: expected player A pending action"));
+            assert_eq!(pending.component_type, 21);
+            assert_eq!(
+                pending.player_id, "player-a",
+                "round {round}: player A should act first"
+            );
+
+            let p0_card_id = pick_card_id(&session, "player-a", 0);
+            let p0_point = card_point(&session, "player-a", &p0_card_id);
+            RuleEngine::submit_action(
+                &runtime_rule,
+                &mut session,
+                "player-a",
+                PlayerActionInput {
+                    cards: vec![p0_card_id],
+                    choice: None,
+                },
+            )
+            .unwrap_or_else(|err| panic!("round {round}: player A play failed: {err:?}"));
+
+            // 轮到玩家 B 出牌。
+            let pending = session
+                .pending_action
+                .clone()
+                .unwrap_or_else(|| panic!("round {round}: expected player B pending action"));
+            assert_eq!(
+                pending.player_id, "player-b",
+                "round {round}: player B should act second"
+            );
+
+            let p1_card_id = pick_card_id(&session, "player-b", 0);
+            let p1_point = card_point(&session, "player-b", &p1_card_id);
+            RuleEngine::submit_action(
+                &runtime_rule,
+                &mut session,
+                "player-b",
+                PlayerActionInput {
+                    cards: vec![p1_card_id],
+                    choice: None,
+                },
+            )
+            .unwrap_or_else(|err| panic!("round {round}: player B play failed: {err:?}"));
+
+            // 强不变量：每轮 round_wins 的精确增量必须与点数比较一致。
+            match p0_point.cmp(&p1_point) {
+                std::cmp::Ordering::Greater => expected_p0_wins += 1,
+                std::cmp::Ordering::Less => expected_p1_wins += 1,
+                std::cmp::Ordering::Equal => {}
+            }
+
+            let p0_wins = session
+                .players
+                .iter()
+                .find(|player| player.id == "player-a")
+                .and_then(|player| player.properties.get("round_wins").copied())
+                .unwrap_or_default();
+            let p1_wins = session
+                .players
+                .iter()
+                .find(|player| player.id == "player-b")
+                .and_then(|player| player.properties.get("round_wins").copied())
+                .unwrap_or_default();
+            assert_eq!(
+                p0_wins, expected_p0_wins,
+                "round {round}: player A round_wins drift after p0={p0_point} p1={p1_point}"
+            );
+            assert_eq!(
+                p1_wins, expected_p1_wins,
+                "round {round}: player B round_wins drift after p0={p0_point} p1={p1_point}"
+            );
+        }
+
+        // 五轮跑完后应进入结算并产出胜者（除非完全平局）。
+        assert_eq!(session.status, "finished", "session should be finished");
+        assert!(session.pending_action.is_none());
+        assert_eq!(session.discard_pile.len(), 10);
+
+        let p0_result = session
+            .settlement_results
+            .get("player-a")
+            .copied()
+            .unwrap_or_default();
+        let p1_result = session
+            .settlement_results
+            .get("player-b")
+            .copied()
+            .unwrap_or_default();
+        let p0_wins = session
+            .players
+            .iter()
+            .find(|player| player.id == "player-a")
+            .and_then(|player| player.properties.get("round_wins").copied())
+            .unwrap_or_default();
+        let p1_wins = session
+            .players
+            .iter()
+            .find(|player| player.id == "player-b")
+            .and_then(|player| player.properties.get("round_wins").copied())
+            .unwrap_or_default();
+
+        match p0_wins.cmp(&p1_wins) {
+            std::cmp::Ordering::Greater => {
+                assert_eq!(p0_result, 1, "player A wins more rounds, should win match");
+                assert_eq!(p1_result, 0);
+            }
+            std::cmp::Ordering::Less => {
+                assert_eq!(p1_result, 1, "player B wins more rounds, should win match");
+                assert_eq!(p0_result, 0);
+            }
+            std::cmp::Ordering::Equal => {
+                // 局合：双方 round_wins 相同时 winner_index 设为 -1，两侧 result=0。
+                assert_eq!(p0_result, 0);
+                assert_eq!(p1_result, 0);
+            }
+        }
+    }
+
+    fn load_nine_nine_rule() -> RuntimeRule {
+        let content = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nine_nine.json"),
+        )
+        .expect("nine_nine.json should exist");
+        let design: ExportedRuleDesign =
+            serde_json::from_str(&content).expect("nine_nine.json should be valid rule json");
+
+        RuleEngine::parse(
+            "99 累加".to_string(),
+            2,
+            "出牌累加，超过 99 即输".to_string(),
+            design,
+        )
+        .expect("nine_nine rule should compile")
+    }
+
+    #[test]
+    fn simulate_99_full_match_overflow_loss() {
+        // 自然出牌（永远出 hand[0]）下，14 张手牌×2 人 = 28 张实际出牌，
+        // 这 28 张牌的点数之和的下界是 220-(40-28 张里最大点数和) = 220-108 = 112，
+        // 所以无论牌堆顺序如何，14 轮内一定会有某一刻 table.total > 99 触发 overflow。
+        let runtime_rule = load_nine_nine_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session = RuleEngine::start_session(
+            "room-99-overflow".to_string(),
+            &runtime_rule,
+            player_ids.clone(),
+        )
+        .expect("99 session should start");
+
+        assert_eq!(session.hands.get("player-a").map(Vec::len), Some(14));
+        assert_eq!(session.hands.get("player-b").map(Vec::len), Some(14));
+
+        let pending = session
+            .pending_action
+            .clone()
+            .expect("expected player A pending action at start");
+        assert_eq!(pending.component_type, 21);
+        assert_eq!(pending.player_id, "player-a");
+
+        let mut expected_p0_total: i64 = 0;
+        let mut expected_p1_total: i64 = 0;
+        let mut last_player: Option<String> = None;
+        let mut plays = 0usize;
+
+        // 最多 28 张实际出牌；理论 14 轮一定 overflow，留些余量防止死循环。
+        while session.status != "finished" && plays < 40 {
+            let pending = session
+                .pending_action
+                .clone()
+                .unwrap_or_else(|| panic!("play {plays}: expected a pending action"));
+            assert_eq!(pending.component_type, 21);
+
+            let player_id = pending.player_id.clone();
+            let card_id = pick_card_id(&session, &player_id, 0);
+            let point = card_point(&session, &player_id, &card_id);
+            assert!(point >= 1, "card 点数 should be at least 1");
+
+            if player_id == "player-a" {
+                expected_p0_total += point;
+            } else {
+                expected_p1_total += point;
+            }
+            last_player = Some(player_id.clone());
+
+            RuleEngine::submit_action(
+                &runtime_rule,
+                &mut session,
+                &player_id,
+                PlayerActionInput {
+                    cards: vec![card_id],
+                    choice: None,
+                },
+            )
+            .unwrap_or_else(|err| panic!("play {plays}: {player_id} play failed: {err:?}"));
+            plays += 1;
+        }
+
+        // 触发 overflow 后局应直接进入结算。
+        assert_eq!(
+            session.status, "finished",
+            "session should finish via overflow within {plays} natural plays"
+        );
+        assert!(session.pending_action.is_none());
+
+        let total = session.table.get("total").copied().unwrap_or_default();
+        assert!(total > 99, "table.total {total} should exceed 99");
+        assert_eq!(
+            total,
+            expected_p0_total + expected_p1_total,
+            "table.total should match sum of all naturally played points"
+        );
+
+        let overflow_idx = session
+            .table
+            .get("overflow_player_index")
+            .copied()
+            .unwrap_or_default();
+        let last_player =
+            last_player.expect("at least one card should have been played before overflow");
+        let expected_overflow_idx = if last_player == "player-a" { 0 } else { 1 };
+        assert_eq!(
+            overflow_idx, expected_overflow_idx,
+            "the player who pushed total past 99 should be marked as overflow loser"
+        );
+
+        // 输家拿 0，赢家拿 1。
+        let (loser, winner) = if expected_overflow_idx == 0 {
+            ("player-a", "player-b")
+        } else {
+            ("player-b", "player-a")
+        };
+        assert_eq!(session.settlement_results.get(loser), Some(&0));
+        assert_eq!(session.settlement_results.get(winner), Some(&1));
+    }
+
+    fn load_big_two_rule() -> RuntimeRule {
+        let content = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("big_two.json"),
+        )
+        .expect("big_two.json should exist");
+        let design: ExportedRuleDesign =
+            serde_json::from_str(&content).expect("big_two.json should be valid rule json");
+
+        RuleEngine::parse(
+            "大老二极简版".to_string(),
+            2,
+            "简化版大老二：单/对/三 + 炸弹，先出完赢。".to_string(),
+            design,
+        )
+        .expect("big_two rule should compile")
+    }
+
+    /// 把 session 的全部 52 张牌池化，按需要的点数分别取出来填给 A、B；
+    /// 剩下的丢回 session.deck，并刷新 player.手牌数。
+    /// 测试需要确定性的手牌组合，不能依赖自然发牌（HashMap 迭代顺序不定）。
+    fn force_bigtwo_hands(session: &mut GameSession, a_points: &[i64], b_points: &[i64]) {
+        force_hands(session, &[("player-a", a_points), ("player-b", b_points)]);
+    }
+
+    fn find_hand_card_by_point(
+        session: &GameSession,
+        player_id: &str,
+        point: i64,
+    ) -> Option<String> {
+        session.hands.get(player_id).and_then(|cards| {
+            cards
+                .iter()
+                .find(|card| card.properties.get("点数").copied().unwrap_or_default() == point)
+                .map(|card| card.id.clone())
+        })
+    }
+
+    #[test]
+    fn simulate_bigtwo_singles_win() {
+        // A 拿 1..=8 八张严格递增的单张；B 拿 8 张 9/K 的牌可随便垫。
+        // A 每轮按递增顺序出最小可压制的单张，B 全过；A 出完 8 张应判赢。
+        let runtime_rule = load_big_two_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-bigtwo-1".to_string(), &runtime_rule, player_ids)
+                .expect("big_two session should start");
+
+        force_bigtwo_hands(
+            &mut session,
+            &[1, 2, 3, 4, 5, 6, 7, 8],
+            &[9, 9, 9, 9, 13, 13, 13, 13],
+        );
+
+        // 起始挂起动作应该是 player-a 的出牌。
+        let pending = session
+            .pending_action
+            .clone()
+            .expect("expected first pending action");
+        assert_eq!(pending.component_type, 21);
+        assert_eq!(pending.player_id, "player-a");
+
+        for point in 1i64..=8 {
+            // A 出一张该点数的单张。
+            let card_id = find_hand_card_by_point(&session, "player-a", point)
+                .unwrap_or_else(|| panic!("player-a 缺少点数 {point} 的牌"));
+            RuleEngine::submit_action(
+                &runtime_rule,
+                &mut session,
+                "player-a",
+                PlayerActionInput {
+                    cards: vec![card_id],
+                    choice: None,
+                },
+            )
+            .unwrap_or_else(|err| panic!("A play point {point} failed: {err:?}"));
+
+            // 若 A 已出完，跳过 B 的 pass —— 引擎应已进入结算。
+            if session.status == "finished" {
+                break;
+            }
+
+            // 轮到 B 时让他 pass。
+            let pending = session
+                .pending_action
+                .clone()
+                .unwrap_or_else(|| panic!("expected B pending after A point {point}"));
+            assert_eq!(pending.player_id, "player-b");
+            RuleEngine::submit_action(
+                &runtime_rule,
+                &mut session,
+                "player-b",
+                PlayerActionInput {
+                    cards: Vec::new(),
+                    choice: None,
+                },
+            )
+            .unwrap_or_else(|err| panic!("B pass after A point {point} failed: {err:?}"));
+        }
+
+        assert_eq!(session.status, "finished", "A 出完 8 张后应结算");
+        assert!(session.pending_action.is_none());
+        assert_eq!(
+            session.hands.get("player-a").map(Vec::len),
+            Some(0),
+            "A 手牌应为 0"
+        );
+        assert_eq!(
+            session.table.get("winner_index").copied(),
+            Some(0),
+            "winner_index 应为 0"
+        );
+        assert_eq!(session.settlement_results.get("player-a"), Some(&1));
+        assert_eq!(session.settlement_results.get("player-b"), Some(&0));
+    }
+
+    #[test]
+    fn simulate_bigtwo_pair_must_beat_pair() {
+        // A 拿一对 3 + 别的散牌；B 拿一对 2、一对 5、若干散牌。
+        // 流程：A 出 (3,3) → B 试 (2,2) 应被拒 → B 出 (5,5) 应成功 → A 该回合换 hand[0] pass。
+        let runtime_rule = load_big_two_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-bigtwo-2".to_string(), &runtime_rule, player_ids)
+                .expect("big_two session should start");
+
+        force_bigtwo_hands(
+            &mut session,
+            // A: pair of 3 + 6 张垫牌（无需特别意义）
+            &[3, 3, 7, 8, 9, 10, 11, 12],
+            // B: pair of 2 + pair of 5 + 4 张垫牌
+            &[2, 2, 5, 5, 6, 6, 13, 13],
+        );
+
+        // A 出对 3
+        let a_cards: Vec<String> = session
+            .hands
+            .get("player-a")
+            .unwrap()
+            .iter()
+            .filter(|c| c.properties.get("点数").copied() == Some(3))
+            .map(|c| c.id.clone())
+            .collect();
+        assert_eq!(a_cards.len(), 2, "A 应该有两张 3");
+        RuleEngine::submit_action(
+            &runtime_rule,
+            &mut session,
+            "player-a",
+            PlayerActionInput {
+                cards: a_cards,
+                choice: None,
+            },
+        )
+        .expect("A 应能首发对 3");
+
+        // 现在应该轮到 B。
+        let pending = session
+            .pending_action
+            .clone()
+            .expect("expected B pending after A's pair");
+        assert_eq!(pending.player_id, "player-b");
+
+        // B 试出对 2（更小） —— 必须被拒。
+        let b_small_pair: Vec<String> = session
+            .hands
+            .get("player-b")
+            .unwrap()
+            .iter()
+            .filter(|c| c.properties.get("点数").copied() == Some(2))
+            .map(|c| c.id.clone())
+            .collect();
+        assert_eq!(b_small_pair.len(), 2, "B 应该有两张 2");
+        let err = RuleEngine::submit_action(
+            &runtime_rule,
+            &mut session,
+            "player-b",
+            PlayerActionInput {
+                cards: b_small_pair,
+                choice: None,
+            },
+        )
+        .expect_err("更小的对子不应被允许压上一手");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("出牌必须符合当前规则的牌型优先级关系") || msg.contains("牌型"),
+            "应为牌型优先级相关错误，实际：{msg}"
+        );
+
+        // 失败后挂起动作仍是 B —— 状态没被破坏。
+        let pending = session
+            .pending_action
+            .clone()
+            .expect("拒绝后仍应保留 B 的挂起");
+        assert_eq!(pending.player_id, "player-b");
+
+        // B 改出对 5 —— 应成功。
+        let b_big_pair: Vec<String> = session
+            .hands
+            .get("player-b")
+            .unwrap()
+            .iter()
+            .filter(|c| c.properties.get("点数").copied() == Some(5))
+            .map(|c| c.id.clone())
+            .collect();
+        assert_eq!(b_big_pair.len(), 2);
+        RuleEngine::submit_action(
+            &runtime_rule,
+            &mut session,
+            "player-b",
+            PlayerActionInput {
+                cards: b_big_pair,
+                choice: None,
+            },
+        )
+        .expect("B 应能用更大的对 5 压制对 3");
+
+        // 验证 last_successful_play 已经变成 B 的对 5。
+        let last = session
+            .last_successful_play
+            .as_ref()
+            .expect("应记录 B 的成功出牌");
+        assert_eq!(last.player_id, "player-b");
+        assert_eq!(last.cards.len(), 2);
+        for c in &last.cards {
+            assert_eq!(c.properties.get("点数").copied(), Some(5));
+        }
+        assert_eq!(
+            session.hands.get("player-b").map(Vec::len),
+            Some(6),
+            "B 应余 6 张"
+        );
+    }
+
+    /// 任务 1：验证 Bomb 通过 successors 能压住 Triple（跨牌型）。
+    /// 若 big_two.json 把 successors 配错（如挂到 Single 上），此测试会因
+    /// can_beat_previous_round 返回 false 而让 B 出炸弹被拒。
+    #[test]
+    fn simulate_bigtwo_bomb_beats_triple() {
+        let runtime_rule = load_big_two_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-bigtwo-bomb".to_string(), &runtime_rule, player_ids)
+                .expect("big_two session should start");
+
+        // A: 三张 1 + 5 张垫牌；B: 四张 7 + 4 张垫牌。
+        force_bigtwo_hands(
+            &mut session,
+            &[1, 1, 1, 2, 3, 4, 5, 6],
+            &[7, 7, 7, 7, 8, 9, 10, 11],
+        );
+
+        // A 出三张 1（Triple）。
+        let a_triple: Vec<String> = session
+            .hands
+            .get("player-a")
+            .unwrap()
+            .iter()
+            .filter(|c| c.properties.get("点数").copied() == Some(1))
+            .map(|c| c.id.clone())
+            .collect();
+        assert_eq!(a_triple.len(), 3, "A 应该有三张 1");
+        RuleEngine::submit_action(
+            &runtime_rule,
+            &mut session,
+            "player-a",
+            PlayerActionInput {
+                cards: a_triple,
+                choice: None,
+            },
+        )
+        .expect("A 应能首发三张 1");
+
+        // 轮到 B 出炸弹 7777。
+        let pending = session
+            .pending_action
+            .clone()
+            .expect("expected B pending after A's triple");
+        assert_eq!(pending.player_id, "player-b");
+
+        let b_bomb: Vec<String> = session
+            .hands
+            .get("player-b")
+            .unwrap()
+            .iter()
+            .filter(|c| c.properties.get("点数").copied() == Some(7))
+            .map(|c| c.id.clone())
+            .collect();
+        assert_eq!(b_bomb.len(), 4, "B 应该有四张 7");
+        RuleEngine::submit_action(
+            &runtime_rule,
+            &mut session,
+            "player-b",
+            PlayerActionInput {
+                cards: b_bomb,
+                choice: None,
+            },
+        )
+        .expect("Bomb 应该能通过 successors 压住 Triple");
+
+        // 验证 last_successful_play 是 B 的炸弹 7777。
+        let last = session
+            .last_successful_play
+            .as_ref()
+            .expect("应记录 B 的炸弹出牌");
+        assert_eq!(last.player_id, "player-b");
+        assert_eq!(last.cards.len(), 4, "炸弹应为 4 张");
+        for c in &last.cards {
+            assert_eq!(
+                c.properties.get("点数").copied(),
+                Some(7),
+                "炸弹四张应同点数 7"
+            );
+        }
+        assert_eq!(
+            session.hands.get("player-b").map(Vec::len),
+            Some(4),
+            "B 出完炸弹应余 4 张"
+        );
+    }
+
+    /// 任务 2：首手玩家不允许 pass（cards=[] 在 last_successful_play=None 时禁止）。
+    /// 引擎保护位于 src/domain/rule_engine.rs:573-578。
+    #[test]
+    fn simulate_bigtwo_first_play_cannot_pass() {
+        let runtime_rule = load_big_two_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session = RuleEngine::start_session(
+            "room-bigtwo-firstpass".to_string(),
+            &runtime_rule,
+            player_ids,
+        )
+        .expect("big_two session should start");
+
+        // 固定手牌只是为了快速失败重现；具体点数不影响 pass 的判定。
+        force_bigtwo_hands(
+            &mut session,
+            &[1, 2, 3, 4, 5, 6, 7, 8],
+            &[9, 9, 9, 9, 13, 13, 13, 13],
+        );
+
+        // 起手必须挂在 A 身上。
+        let pending_before = session
+            .pending_action
+            .clone()
+            .expect("expected first pending action");
+        assert_eq!(pending_before.player_id, "player-a");
+        assert!(
+            session.last_successful_play.is_none(),
+            "首手时 last_successful_play 必须为空"
+        );
+
+        // A 尝试空选择 pass —— 必须被拒。
+        let err = RuleEngine::submit_action(
+            &runtime_rule,
+            &mut session,
+            "player-a",
+            PlayerActionInput {
+                cards: Vec::new(),
+                choice: None,
+            },
+        )
+        .expect_err("首手玩家不应被允许 pass");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("Cannot skip before any card has been played"),
+            "应为首手禁止 pass 的错误，实际：{msg}"
+        );
+
+        // 错误返回后挂起动作仍是 A —— 不应已切到 B。
+        let pending_after = session
+            .pending_action
+            .clone()
+            .expect("拒绝后挂起动作不应被清空");
+        assert_eq!(
+            pending_after.player_id, "player-a",
+            "拒绝后回合仍应在 A 身上"
+        );
+        assert_eq!(pending_after.id, pending_before.id, "挂起节点 id 不应变化");
+        assert!(
+            session.last_successful_play.is_none(),
+            "失败的 pass 不应写入 last_successful_play"
+        );
+    }
+
+    /// 任务 3：跨牌型只能用炸弹压。Triple 既不在 Pair 的 successors 也没有
+    /// cardset_comparisons 兜底，必须被拒；之后 B 出炸弹 5555 应成功。
+    #[test]
+    fn simulate_bigtwo_cross_type_must_use_bomb() {
+        let runtime_rule = load_big_two_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-bigtwo-cross".to_string(), &runtime_rule, player_ids)
+                .expect("big_two session should start");
+
+        // A: 对 3 + 6 张垫牌；B: 三张 4 + 四张 5 + 1 张垫牌。
+        force_bigtwo_hands(
+            &mut session,
+            &[3, 3, 7, 8, 9, 10, 11, 12],
+            &[4, 4, 4, 5, 5, 5, 5, 13],
+        );
+
+        // A 先出对 3。
+        let a_pair: Vec<String> = session
+            .hands
+            .get("player-a")
+            .unwrap()
+            .iter()
+            .filter(|c| c.properties.get("点数").copied() == Some(3))
+            .map(|c| c.id.clone())
+            .collect();
+        assert_eq!(a_pair.len(), 2);
+        RuleEngine::submit_action(
+            &runtime_rule,
+            &mut session,
+            "player-a",
+            PlayerActionInput {
+                cards: a_pair,
+                choice: None,
+            },
+        )
+        .expect("A 应能首发对 3");
+
+        // B 尝试出 Triple 444 压 Pair —— 必须被拒（既无 successors，也无 cardset_comparisons）。
+        let b_triple: Vec<String> = session
+            .hands
+            .get("player-b")
+            .unwrap()
+            .iter()
+            .filter(|c| c.properties.get("点数").copied() == Some(4))
+            .map(|c| c.id.clone())
+            .collect();
+        assert_eq!(b_triple.len(), 3);
+        let err = RuleEngine::submit_action(
+            &runtime_rule,
+            &mut session,
+            "player-b",
+            PlayerActionInput {
+                cards: b_triple,
+                choice: None,
+            },
+        )
+        .expect_err("Triple 不应能压 Pair");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("出牌必须符合当前规则的牌型优先级关系") || msg.contains("牌型"),
+            "应为牌型优先级相关错误，实际：{msg}"
+        );
+
+        // 拒绝后挂起仍是 B。
+        let pending_after_reject = session
+            .pending_action
+            .clone()
+            .expect("拒绝后应保留 B 的挂起");
+        assert_eq!(pending_after_reject.player_id, "player-b");
+
+        // last_successful_play 仍是 A 的对 3 —— 状态没被破坏。
+        let last_after_reject = session
+            .last_successful_play
+            .as_ref()
+            .expect("A 的对 3 应仍是上一手");
+        assert_eq!(last_after_reject.player_id, "player-a");
+        assert_eq!(last_after_reject.cards.len(), 2);
+
+        // B 改出炸弹 5555 —— 应成功（Bomb 在 successors 中包含 Pair=id 2）。
+        let b_bomb: Vec<String> = session
+            .hands
+            .get("player-b")
+            .unwrap()
+            .iter()
+            .filter(|c| c.properties.get("点数").copied() == Some(5))
+            .map(|c| c.id.clone())
+            .collect();
+        assert_eq!(b_bomb.len(), 4);
+        RuleEngine::submit_action(
+            &runtime_rule,
+            &mut session,
+            "player-b",
+            PlayerActionInput {
+                cards: b_bomb,
+                choice: None,
+            },
+        )
+        .expect("炸弹应能压住对 3");
+
+        let last = session
+            .last_successful_play
+            .as_ref()
+            .expect("应记录 B 的炸弹出牌");
+        assert_eq!(last.player_id, "player-b");
+        assert_eq!(last.cards.len(), 4);
+        for c in &last.cards {
+            assert_eq!(c.properties.get("点数").copied(), Some(5));
+        }
+    }
+
+    fn load_blackjack_rule() -> RuntimeRule {
+        let content = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("blackjack.json"),
+        )
+        .expect("blackjack.json should exist");
+        let design: ExportedRuleDesign =
+            serde_json::from_str(&content).expect("blackjack.json should be valid rule json");
+
+        RuleEngine::parse(
+            "21 点（伪版）".to_string(),
+            2,
+            "伪版 21 点：每人 3 张明牌，直接累加点数".to_string(),
+            design,
+        )
+        .expect("blackjack rule should compile")
+    }
+
+    /// 21 点强行注入手牌；与 force_bigtwo_hands 同构，但目标长度固定为 3。
+    fn force_blackjack_hands(session: &mut GameSession, a_points: &[i64], b_points: &[i64]) {
+        force_hands(session, &[("player-a", a_points), ("player-b", b_points)]);
+    }
+
+    /// 每个玩家把强行注入的 3 张手牌一次性全部亮出（type 21 出牌动作 → 把 3 张
+    /// 推进 last_action_cards，match_flow 的 m_played_sum 据此累加并写入 table 分数）。
+    fn play_all_three(runtime_rule: &RuntimeRule, session: &mut GameSession, player_id: &str) {
+        let pending = session
+            .pending_action
+            .clone()
+            .unwrap_or_else(|| panic!("{player_id} 应有挂起的出牌动作"));
+        assert_eq!(pending.component_type, 21);
+        assert_eq!(pending.player_id, player_id);
+
+        let card_ids: Vec<String> = session
+            .hands
+            .get(player_id)
+            .map(|cards| cards.iter().map(|card| card.id.clone()).collect())
+            .unwrap_or_default();
+        assert_eq!(card_ids.len(), 3, "{player_id} 必须正好持有 3 张牌");
+
+        RuleEngine::submit_action(
+            runtime_rule,
+            session,
+            player_id,
+            PlayerActionInput {
+                cards: card_ids,
+                choice: None,
+            },
+        )
+        .unwrap_or_else(|err| panic!("{player_id} 亮出 3 张失败：{err:?}"));
+    }
+
+    #[test]
+    fn simulate_blackjack_smaller_score_wins_when_neither_bust() {
+        // A = 5+7+8 = 20，B = 3+4+9 = 16，双方都没爆 → A 更接近 21 应赢。
+        let runtime_rule = load_blackjack_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-bj-1".to_string(), &runtime_rule, player_ids)
+                .expect("blackjack session should start");
+
+        // 开局应直接发完 3 张并挂起 player-a 的出牌动作。
+        assert_eq!(session.hands.get("player-a").map(Vec::len), Some(3));
+        assert_eq!(session.hands.get("player-b").map(Vec::len), Some(3));
+
+        force_blackjack_hands(&mut session, &[5, 7, 8], &[3, 4, 9]);
+
+        play_all_three(&runtime_rule, &mut session, "player-a");
+        play_all_three(&runtime_rule, &mut session, "player-b");
+
+        assert_eq!(session.status, "finished", "双方亮牌后应直接进入结算");
+        assert!(session.pending_action.is_none());
+
+        assert_eq!(
+            session.table.get("p0_score").copied(),
+            Some(20),
+            "p0_score 应为 20"
+        );
+        assert_eq!(
+            session.table.get("p1_score").copied(),
+            Some(16),
+            "p1_score 应为 16"
+        );
+        assert_eq!(
+            session.table.get("winner_index").copied(),
+            Some(0),
+            "A 更接近 21 应赢"
+        );
+        assert_eq!(session.settlement_results.get("player-a"), Some(&1));
+        assert_eq!(session.settlement_results.get("player-b"), Some(&0));
+    }
+
+    #[test]
+    fn simulate_blackjack_only_non_bust_wins() {
+        // A = 10+10+5 = 25（爆），B = 3+4+5 = 12（不爆）→ B 应赢。
+        let runtime_rule = load_blackjack_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-bj-2".to_string(), &runtime_rule, player_ids)
+                .expect("blackjack session should start");
+
+        force_blackjack_hands(&mut session, &[10, 10, 5], &[3, 4, 5]);
+
+        play_all_three(&runtime_rule, &mut session, "player-a");
+        play_all_three(&runtime_rule, &mut session, "player-b");
+
+        assert_eq!(session.status, "finished");
+        assert!(session.pending_action.is_none());
+
+        assert_eq!(
+            session.table.get("p0_score").copied(),
+            Some(25),
+            "p0_score 应为 25（爆牌）"
+        );
+        assert_eq!(
+            session.table.get("p1_score").copied(),
+            Some(12),
+            "p1_score 应为 12"
+        );
+        assert_eq!(
+            session.table.get("winner_index").copied(),
+            Some(1),
+            "B 没爆 A 爆，B 应赢"
+        );
+        assert_eq!(session.settlement_results.get("player-a"), Some(&0));
+        assert_eq!(session.settlement_results.get("player-b"), Some(&1));
+    }
+
+    #[test]
+    fn simulate_blackjack_both_bust_no_winner() {
+        // A = 10+10+5 = 25（爆），B = 13+13+13 = 39（爆）→ 双方都爆判和。
+        let runtime_rule = load_blackjack_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-bj-3".to_string(), &runtime_rule, player_ids)
+                .expect("blackjack session should start");
+
+        force_blackjack_hands(&mut session, &[10, 10, 5], &[13, 13, 13]);
+
+        play_all_three(&runtime_rule, &mut session, "player-a");
+        play_all_three(&runtime_rule, &mut session, "player-b");
+
+        assert_eq!(session.status, "finished", "双方亮牌后应进入结算");
+        assert!(session.pending_action.is_none());
+
+        assert_eq!(
+            session.table.get("p0_score").copied(),
+            Some(25),
+            "p0_score 应为 25（爆牌）"
+        );
+        assert_eq!(
+            session.table.get("p1_score").copied(),
+            Some(39),
+            "p1_score 应为 39（爆牌）"
+        );
+        assert_eq!(
+            session.table.get("winner_index").copied(),
+            Some(-1),
+            "双方都爆 winner_index 应为 -1"
+        );
+        assert_eq!(session.settlement_results.get("player-a"), Some(&0));
+        assert_eq!(session.settlement_results.get("player-b"), Some(&0));
+    }
+
+    #[test]
+    fn simulate_blackjack_tie_score_no_winner() {
+        // A = 5+5+5 = 15，B = 3+6+6 = 15，两边都没爆且同分 → 平局判和。
+        let runtime_rule = load_blackjack_rule();
+        let player_ids = vec!["player-a".to_string(), "player-b".to_string()];
+        let mut session =
+            RuleEngine::start_session("room-bj-4".to_string(), &runtime_rule, player_ids)
+                .expect("blackjack session should start");
+
+        force_blackjack_hands(&mut session, &[5, 5, 5], &[3, 6, 6]);
+
+        play_all_three(&runtime_rule, &mut session, "player-a");
+        play_all_three(&runtime_rule, &mut session, "player-b");
+
+        assert_eq!(session.status, "finished", "双方亮牌后应进入结算");
+        assert!(session.pending_action.is_none());
+
+        assert_eq!(
+            session.table.get("p0_score").copied(),
+            Some(15),
+            "p0_score 应为 15"
+        );
+        assert_eq!(
+            session.table.get("p1_score").copied(),
+            Some(15),
+            "p1_score 应为 15"
+        );
+        assert_eq!(
+            session.table.get("winner_index").copied(),
+            Some(-1),
+            "同分时 winner_index 应为 -1"
+        );
+        assert_eq!(session.settlement_results.get("player-a"), Some(&0));
         assert_eq!(session.settlement_results.get("player-b"), Some(&0));
     }
 }

@@ -5,7 +5,7 @@ mod interface;
 mod state;
 
 use crate::infrastructure::user::UserRepository;
-use crate::interface::{replay, room, rule, user};
+use crate::interface::{replay, market, room, rule, user};
 use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
@@ -146,7 +146,54 @@ async fn main() {
         )
         .route(
             "/api/rules/drafts/{draft_id}/publish",
+            #[allow(deprecated)]
             post(rule::publish_draft),
+        )
+        .route(
+            "/api/rules/drafts/{draft_id}/submit-review",
+            post(rule::submit_review),
+        )
+        .route(
+            "/api/rules/drafts/{draft_id}/images",
+            post(rule::upload_rule_image),
+        )
+        .route("/api/admin/rules/pending", get(rule::list_pending_reviews))
+        .route(
+            "/api/admin/rules/drafts/{draft_id}",
+            get(rule::admin_get_draft),
+        )
+        .route(
+            "/api/admin/rules/{draft_id}/approve",
+            post(rule::approve_draft),
+        )
+        .route(
+            "/api/admin/rules/{draft_id}/reject",
+            post(rule::reject_draft),
+        )
+        .route("/api/rules/published", get(market::list_published_rules))
+        .route(
+            "/api/rules/published/{rule_id}",
+            get(market::get_published_rule_detail),
+        )
+        .route(
+            "/api/rules/published/{rule_id}/rooms",
+            get(market::list_rooms_for_rule),
+        )
+        .route(
+            "/api/rules/published/{rule_id}/reviews",
+            post(market::create_review),
+        )
+        .route(
+            "/api/rules/reviews/images",
+            post(market::upload_review_image),
+        )
+        .route(
+            "/api/rules/published/{rule_id}/fork",
+            post(rule::fork_published_rule),
+        )
+        .route(
+            "/api/rules/developers/{developer_id}/rules",
+            get(market::list_developer_rules),
         )
         .route("/api/room/rules", get(rule::rule_options))
         .route("/api/room/create", post(room::create_room))

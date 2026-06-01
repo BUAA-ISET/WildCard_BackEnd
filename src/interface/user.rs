@@ -40,6 +40,7 @@ pub struct UserDto {
     pub username: String,
     pub email: String,
     pub avatar: String,
+    pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
 }
@@ -51,6 +52,7 @@ impl UserDto {
             username: user.name,
             email: user.email,
             avatar: user.avatar,
+            role: user.role,
             token: None,
         }
     }
@@ -355,6 +357,8 @@ pub async fn register(
         email: email.clone(),
         password,
         avatar: String::new(),
+        // 新注册一律是普通用户；首任管理员靠 init.sql / ensure_schema 的 UPDATE Tanhhhhtjy 完成。
+        role: "user".to_string(),
     };
     user_repo.register(user).await?;
 
@@ -534,7 +538,7 @@ pub async fn update_email(
 
 const AVATAR_MAX_BYTES: usize = 2 * 1024 * 1024;
 
-fn extension_for_mime(mime: &str) -> Option<&'static str> {
+pub fn extension_for_mime(mime: &str) -> Option<&'static str> {
     match mime {
         "image/png" => Some("png"),
         "image/jpeg" | "image/jpg" => Some("jpg"),
@@ -716,7 +720,9 @@ pub async fn password_reset(
 
 #[cfg(test)]
 mod tests {
-    use super::{extension_for_mime, looks_like_email, validate_login_account};
+    use super::{UserDto, extension_for_mime, looks_like_email, validate_login_account};
+    use crate::domain::user::{User, UserId};
+    use uuid::Uuid;
 
     #[test]
     fn looks_like_email_detects_at_symbol() {
@@ -774,5 +780,44 @@ mod tests {
         }
         // 50 个调用拿到 50 个全相同结果的概率是 (1/10^6)^49，实际上一定不会发生
         assert!(codes.len() > 1, "generate_code 应该返回随机序列");
+    }
+
+    #[test]
+    fn user_dto_from_user_preserves_role_for_admin_gating() {
+        let user = User {
+            id: UserId(Uuid::new_v4()),
+            name: "Admin".to_string(),
+            email: "admin@example.com".to_string(),
+            password: "hashed".to_string(),
+            avatar: "/avatar.png".to_string(),
+            role: "admin".to_string(),
+        };
+
+        let dto = UserDto::from_user(user);
+
+        assert_eq!(dto.username, "Admin");
+        assert_eq!(dto.role, "admin");
+        assert!(dto.token.is_none());
+    }
+
+    #[test]
+    fn user_dto_with_token_serializes_role_and_token_together() {
+        let user = User {
+            id: UserId(Uuid::new_v4()),
+            name: "Admin".to_string(),
+            email: "admin@example.com".to_string(),
+            password: "hashed".to_string(),
+            avatar: "/avatar.png".to_string(),
+            role: "admin".to_string(),
+        };
+
+        let dto = UserDto::from_user_with_token(user, "jwt-token".to_string());
+        let json = serde_json::to_value(dto).unwrap();
+
+        assert_eq!(json.get("role").and_then(|v| v.as_str()), Some("admin"));
+        assert_eq!(
+            json.get("token").and_then(|v| v.as_str()),
+            Some("jwt-token")
+        );
     }
 }
