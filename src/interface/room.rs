@@ -13,7 +13,11 @@ use crate::{
     },
     error::AppError,
     infrastructure::user::UserRepository,
-    interface::{auth::TokenClaims, user::ApiResponse},
+    interface::{
+        auth::TokenClaims,
+        replay::{ReplayStore, append_match_replay_frame, start_match_replay},
+        user::ApiResponse,
+    },
     state::{RoomStore, RuleStore},
 };
 
@@ -312,6 +316,7 @@ pub async fn start_game(
     TokenClaims { user_id, .. }: TokenClaims,
     State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
+    State(replay_store): State<ReplayStore>,
 ) -> Result<Json<ApiResponse<Room>>, AppError> {
     let player_id = user_id.to_string();
     let mut room_guard = room_store.write().await;
@@ -351,10 +356,12 @@ pub async fn start_game(
     let session = RuleEngine::start_session(room.code.clone(), &runtime_rule, player_ids)?;
     let session_id = session.id.clone();
 
-    room.status = RoomStatus::Playing;
-    room.game_session_id = Some(session_id.clone());
-    let room_snapshot = public_room(room);
-    let _ = room;
+    let room_snapshot = {
+        room.status = RoomStatus::Playing;
+        room.game_session_id = Some(session_id.clone());
+        public_room(room)
+    };
+    start_match_replay(&replay_store, &session, &room_snapshot).await;
     room_guard.sessions.insert(session_id, session);
 
     Ok(Json(ApiResponse::success(room_snapshot)))
@@ -462,6 +469,7 @@ pub async fn play_cards(
     TokenClaims { user_id, .. }: TokenClaims,
     State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
+    State(replay_store): State<ReplayStore>,
     Path((session_id, action_id)): Path<(String, String)>,
     Json(payload): Json<PlayerActionInput>,
 ) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
@@ -469,6 +477,7 @@ pub async fn play_cards(
         user_id.to_string(),
         rule_store,
         room_store,
+        replay_store,
         session_id,
         action_id,
         payload,
@@ -480,12 +489,14 @@ pub async fn skip_action(
     TokenClaims { user_id, .. }: TokenClaims,
     State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
+    State(replay_store): State<ReplayStore>,
     Path((session_id, action_id)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
     submit_game_action(
         user_id.to_string(),
         rule_store,
         room_store,
+        replay_store,
         session_id,
         action_id,
         PlayerActionInput {
@@ -500,6 +511,7 @@ pub async fn choose_action(
     TokenClaims { user_id, .. }: TokenClaims,
     State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
+    State(replay_store): State<ReplayStore>,
     Path((session_id, action_id)): Path<(String, String)>,
     Json(payload): Json<PlayerActionInput>,
 ) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
@@ -507,6 +519,7 @@ pub async fn choose_action(
         user_id.to_string(),
         rule_store,
         room_store,
+        replay_store,
         session_id,
         action_id,
         payload,
@@ -518,6 +531,7 @@ async fn submit_game_action(
     player_id: String,
     rule_store: RuleStore,
     room_store: RoomStore,
+    replay_store: ReplayStore,
     session_id: String,
     action_id: String,
     payload: PlayerActionInput,
@@ -556,9 +570,10 @@ async fn submit_game_action(
         session.clone()
     };
 
-    if session_snapshot.status == "finished"
-        && let Some(room) = room_guard.rooms.get_mut(&room_code)
-    {
+    let room_before_reset = room_guard.rooms.get(&room_code).cloned();
+    append_match_replay_frame(&replay_store, &session_snapshot, room_before_reset.as_ref()).await;
+
+    if session_snapshot.status == "finished" && let Some(room) = room_guard.rooms.get_mut(&room_code) {
         reset_room_after_game(room);
     }
 

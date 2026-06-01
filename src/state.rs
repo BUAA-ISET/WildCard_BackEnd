@@ -6,6 +6,7 @@ use tokio::sync::RwLock;
 use crate::domain::game::GameSession;
 use crate::infrastructure::email::EmailSender;
 use crate::infrastructure::user::UserRepository;
+use crate::interface::replay::ReplayStore;
 use crate::interface::room::RoomRepository;
 use crate::interface::rule::{RulePersistence, RuleRepository};
 
@@ -20,6 +21,7 @@ pub struct GlobalState {
     pub games: Arc<RwLock<HashMap<String, GameSession>>>,
     pub rules: RuleStore,
     pub rooms: RoomStore,
+    pub replays: ReplayStore,
     pub email: EmailSender,
     pub upload_dir: UploadDir,
 }
@@ -76,6 +78,12 @@ impl FromRef<GlobalState> for RoomStore {
 impl FromRef<GlobalState> for Arc<RwLock<HashMap<String, GameSession>>> {
     fn from_ref(input: &GlobalState) -> Self {
         input.games.clone()
+    }
+}
+
+impl FromRef<GlobalState> for ReplayStore {
+    fn from_ref(input: &GlobalState) -> Self {
+        input.replays.clone()
     }
 }
 

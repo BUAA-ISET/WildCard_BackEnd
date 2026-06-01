@@ -5,7 +5,7 @@ use axum::{
     extract::{Multipart, Path, State},
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Row, postgres::PgRow};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -1100,7 +1100,7 @@ impl RulePersistence {
                 serde_json::from_value(screenshot_urls_raw).unwrap_or_default();
 
             let draft = RuleDraft {
-                id: row.get("id"),
+                id: read_id_as_string(&row, "id")?,
                 owner_id: row.get::<Uuid, _>("owner_id").to_string(),
                 name: row.get("name"),
                 player_count: row.get::<i16, _>("player_count") as u8,
@@ -1368,6 +1368,30 @@ fn ensure_owner(owner_id: &str, user_id: &str) -> Result<(), AppError> {
 
 fn now_millis() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000
+}
+
+fn read_id_as_string(row: &PgRow, column: &str) -> Result<String, AppError> {
+    row.try_get::<String, _>(column)
+        .or_else(|_| row.try_get::<Uuid, _>(column).map(|id| id.to_string()))
+        .map_err(AppError::DatabaseError)
+}
+
+fn read_optional_id_as_string(row: &PgRow, column: &str) -> Result<Option<String>, AppError> {
+    row.try_get::<Option<String>, _>(column)
+        .or_else(|_| {
+            row.try_get::<Option<Uuid>, _>(column)
+                .map(|id| id.map(|id| id.to_string()))
+        })
+        .map_err(AppError::DatabaseError)
+}
+
+fn read_timestamp_millis(row: &PgRow, column: &str) -> Result<i64, AppError> {
+    row.try_get::<i64, _>(column)
+        .or_else(|_| {
+            row.try_get::<time::OffsetDateTime, _>(column)
+                .map(|value| value.unix_timestamp_nanos() as i64 / 1_000_000)
+        })
+        .map_err(AppError::DatabaseError)
 }
 
 #[allow(dead_code)]
