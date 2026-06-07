@@ -14,6 +14,10 @@ mod error {
 }
 
 mod domain {
+    pub mod replay {
+        pub use wildcard_backend::domain::replay::*;
+    }
+
     pub mod room {
         pub use wildcard_backend::domain::room::*;
     }
@@ -192,6 +196,13 @@ mod interface {
         }
     }
 
+    pub mod replay {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/interface/replay.rs"
+        ));
+    }
+
     pub mod room {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -216,6 +227,7 @@ use domain::{
 use infrastructure::user::UserRepository;
 use interface::{
     auth::TokenClaims,
+    replay::{ReplayPersistence, build_replay_store},
     room::{
         CreateRoomRequest, CurrentGameQuery, JoinRoomRequest, ReadyRequest, RoomCodeQuery,
         RuleQuery, build_room_store, check_password, choose_action, create_room, current_game,
@@ -225,6 +237,16 @@ use interface::{
     rule::{PublishedRule, RuleRepository},
 };
 use state::RuleStore;
+
+fn replay_persistence() -> ReplayPersistence {
+    ReplayPersistence {
+        pool: sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_millis(10))
+            .connect_lazy("postgres://user:password@127.0.0.1:1/wildcard_test")
+            .expect("lazy replay pool should be constructible"),
+    }
+}
 
 fn claims(id: Uuid) -> TokenClaims {
     TokenClaims {
@@ -353,6 +375,8 @@ async fn room_lifecycle_endpoints_cover_create_join_ready_rule_and_leave() {
     ]));
     let room_store = build_room_store();
     let rules = rule_store(published_rule("tiny", "Tiny"));
+    let replay_store = build_replay_store();
+    let replay_persistence = replay_persistence();
 
     let created = create_room(
         claims(host),
@@ -482,6 +506,8 @@ async fn room_lifecycle_endpoints_cover_create_join_ready_rule_and_leave() {
         claims(host),
         State(rules.clone()),
         State(room_store.clone()),
+        State(replay_store.clone()),
+        State(replay_persistence.clone()),
     )
     .await
     .expect("host should start full ready room")
@@ -490,6 +516,23 @@ async fn room_lifecycle_endpoints_cover_create_join_ready_rule_and_leave() {
     .expect("started room should be returned");
     assert_eq!(started.status, RoomStatus::Playing);
     assert!(started.game_session_id.is_some());
+    let started_session_id = started
+        .game_session_id
+        .clone()
+        .expect("started room should have session id");
+    let replay_guard = replay_store.read().await;
+    let replay_id = replay_guard
+        .session_replay_ids
+        .get(&started_session_id)
+        .expect("started session should be linked to replay");
+    let replay = replay_guard
+        .replays
+        .get(replay_id)
+        .expect("started replay should be stored in memory");
+    assert_eq!(replay.record.room_code, code);
+    assert_eq!(replay.record.players.len(), 2);
+    assert_eq!(replay.frames.len(), 1);
+    drop(replay_guard);
 
     let leave_started = leave_room(claims(guest), State(room_store.clone()))
         .await
@@ -513,6 +556,8 @@ async fn room_game_queries_and_actions_cover_snapshot_error_and_finish_paths() {
     ]));
     let room_store = build_room_store();
     let rules = rule_store(published_rule("tiny", "Tiny"));
+    let replay_store = build_replay_store();
+    let replay_persistence = replay_persistence();
 
     let created = create_room(
         claims(host),
@@ -554,6 +599,8 @@ async fn room_game_queries_and_actions_cover_snapshot_error_and_finish_paths() {
         claims(guest),
         State(rules.clone()),
         State(room_store.clone()),
+        State(replay_store.clone()),
+        State(replay_persistence.clone()),
     )
     .await;
     assert!(not_host.is_err());
@@ -562,6 +609,8 @@ async fn room_game_queries_and_actions_cover_snapshot_error_and_finish_paths() {
         claims(host),
         State(rules.clone()),
         State(room_store.clone()),
+        State(replay_store.clone()),
+        State(replay_persistence.clone()),
     )
     .await
     .expect("host should start room")
@@ -606,6 +655,8 @@ async fn room_game_queries_and_actions_cover_snapshot_error_and_finish_paths() {
         claims(host),
         State(rules.clone()),
         State(room_store.clone()),
+        State(replay_store.clone()),
+        State(replay_persistence.clone()),
         Path((session_id.clone(), "not-the-pending-action".to_string())),
         Json(PlayerActionInput {
             cards: Vec::new(),
@@ -628,6 +679,8 @@ async fn room_game_queries_and_actions_cover_snapshot_error_and_finish_paths() {
         claims(host),
         State(rules.clone()),
         State(room_store.clone()),
+        State(replay_store.clone()),
+        State(replay_persistence.clone()),
         Path((session_id.clone(), pending.action_id.clone())),
         Json(PlayerActionInput {
             cards: vec![first_card],
@@ -642,6 +695,29 @@ async fn room_game_queries_and_actions_cover_snapshot_error_and_finish_paths() {
     assert_eq!(finished.status, "finished");
     assert_eq!(finished.last_action.as_ref().unwrap().action, "play_cards");
     assert_eq!(finished.winner_ids, vec![host.to_string()]);
+    let replay_guard = replay_store.read().await;
+    let replay_id = replay_guard
+        .session_replay_ids
+        .get(&session_id)
+        .expect("session should be linked to a replay");
+    let replay = replay_guard
+        .replays
+        .get(replay_id)
+        .expect("replay should remain in memory after finishing");
+    assert_eq!(replay.record.winner_ids, vec![host.to_string()]);
+    assert!(replay.frames.len() >= 2);
+    assert_eq!(
+        replay
+            .frames
+            .last()
+            .unwrap()
+            .action
+            .as_ref()
+            .unwrap()
+            .player_id,
+        host.to_string()
+    );
+    drop(replay_guard);
 
     let after_finish = current_game(
         claims(guest),
@@ -661,6 +737,8 @@ async fn room_game_queries_and_actions_cover_snapshot_error_and_finish_paths() {
         claims(guest),
         State(rules.clone()),
         State(room_store.clone()),
+        State(replay_store.clone()),
+        State(replay_persistence.clone()),
         Path((session_id, pending.action_id)),
     )
     .await;
