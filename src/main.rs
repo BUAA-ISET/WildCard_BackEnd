@@ -10,6 +10,7 @@ use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     http::{HeaderName, HeaderValue, Method},
     routing::{get, post},
 };
@@ -162,7 +163,7 @@ async fn main() {
         )
         .route(
             "/api/rules/drafts/{draft_id}/images",
-            post(rule::upload_rule_image),
+            post(rule::upload_rule_image).layer(DefaultBodyLimit::max(5 * 1024 * 1024)),
         )
         .route("/api/admin/rules/pending", get(rule::list_pending_reviews))
         .route(

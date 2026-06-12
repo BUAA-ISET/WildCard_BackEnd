@@ -86,6 +86,26 @@ pub struct ExportedRuleDesign {
     pub match_flow: FlowGraph,
     #[serde(default)]
     pub end_flow: FlowGraph,
+    #[serde(default)]
+    pub assets: RuleAssets,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuleAssets {
+    #[serde(default)]
+    pub card_faces: HashMap<String, CardFaceAsset>,
+    #[serde(default)]
+    pub card_back: String,
+    #[serde(default)]
+    pub background: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CardFaceAsset {
+    #[serde(default)]
+    pub properties: HashMap<String, i64>,
+    #[serde(default)]
+    pub image_url: String,
 }
 
 pub type FlowGraph = HashMap<String, FlowNode>;

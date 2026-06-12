@@ -624,6 +624,7 @@ async fn room_game_queries_and_actions_cover_snapshot_error_and_finish_paths() {
 
     let snapshot = current_game(
         claims(host),
+        State(rules.clone()),
         State(room_store.clone()),
         Query(CurrentGameQuery {
             room_code: Some(created.code.to_lowercase()),
@@ -641,6 +642,7 @@ async fn room_game_queries_and_actions_cover_snapshot_error_and_finish_paths() {
 
     let direct_snapshot = get_game(
         claims(host),
+        State(rules.clone()),
         State(room_store.clone()),
         Path(session_id.clone()),
     )
@@ -721,6 +723,7 @@ async fn room_game_queries_and_actions_cover_snapshot_error_and_finish_paths() {
 
     let after_finish = current_game(
         claims(guest),
+        State(rules.clone()),
         State(room_store.clone()),
         Query(CurrentGameQuery {
             room_code: Some(started.code),

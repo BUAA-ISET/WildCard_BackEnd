@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     domain::{
         room::{Player, Room, RoomRuleResponse, RoomStatus},
-        rule_engine::{GameCard, GameSession, PlayerActionInput, RuleEngine},
+        rule_engine::{GameCard, GameSession, PlayerActionInput, RuleAssets, RuleEngine},
     },
     error::AppError,
     infrastructure::user::UserRepository,
@@ -149,6 +149,7 @@ pub struct GameSnapshotView {
     pub pending_action: Option<PendingActionView>,
     pub last_action: Option<GameActionRecordView>,
     pub winner_ids: Vec<String>,
+    pub assets: RuleAssets,
 }
 
 pub fn build_room_store() -> RoomStore {
@@ -405,6 +406,7 @@ pub async fn get_room_rule(
 
 pub async fn current_game(
     TokenClaims { user_id, .. }: TokenClaims,
+    State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
     Query(query): Query<CurrentGameQuery>,
 ) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
@@ -441,6 +443,7 @@ pub async fn current_game(
         .get(&room_code)
         .map(|room| room.round_time)
         .unwrap_or(30);
+    let assets = load_rule_assets(&rule_store, &rule_id).await;
 
     Ok(Json(ApiResponse::success(build_game_snapshot(
         &session,
@@ -448,11 +451,13 @@ pub async fn current_game(
         round_time,
         &user_id.to_string(),
         guard.rooms.get(&room_code),
+        assets,
     ))))
 }
 
 pub async fn get_game(
     TokenClaims { user_id, .. }: TokenClaims,
+    State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
     Path(session_id): Path<String>,
 ) -> Result<Json<ApiResponse<GameSnapshotView>>, AppError> {
@@ -465,6 +470,7 @@ pub async fn get_game(
     let room = guard.rooms.get(&session.room_code);
     let rule_id = room.map(|room| room.rule_id.clone()).unwrap_or_default();
     let round_time = room.map(|room| room.round_time).unwrap_or(30);
+    let assets = load_rule_assets(&rule_store, &rule_id).await;
 
     Ok(Json(ApiResponse::success(build_game_snapshot(
         &session,
@@ -472,6 +478,7 @@ pub async fn get_game(
         round_time,
         &user_id.to_string(),
         room,
+        assets,
     ))))
 }
 
@@ -603,6 +610,7 @@ async fn submit_game_action(
     let room = room_guard.rooms.get(&room_code);
     let rule_id = room.map(|room| room.rule_id.clone()).unwrap_or_default();
     let round_time = room.map(|room| room.round_time).unwrap_or(30);
+    let assets = runtime_rule.design.assets.clone();
 
     Ok(Json(ApiResponse::success(build_game_snapshot(
         &session_snapshot,
@@ -610,6 +618,7 @@ async fn submit_game_action(
         round_time,
         &player_id,
         room,
+        assets,
     ))))
 }
 
@@ -751,6 +760,7 @@ fn build_game_snapshot(
     round_time: u32,
     viewer_id: &str,
     room: Option<&Room>,
+    assets: RuleAssets,
 ) -> GameSnapshotView {
     let current_player_id = session
         .pending_action
@@ -869,7 +879,17 @@ fn build_game_snapshot(
             }
         }),
         winner_ids,
+        assets,
     }
+}
+
+async fn load_rule_assets(rule_store: &RuleStore, rule_id: &str) -> RuleAssets {
+    let rule_guard = rule_store.read().await;
+    rule_guard
+        .published
+        .get(rule_id)
+        .map(|published| published.runtime.design.assets.clone())
+        .unwrap_or_default()
 }
 
 fn to_card_view(card: &GameCard) -> GameCardView {

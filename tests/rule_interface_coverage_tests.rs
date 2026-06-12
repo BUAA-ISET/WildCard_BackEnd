@@ -182,6 +182,7 @@ fn empty_design() -> ExportedRuleDesign {
         cardset_comparisons: HashMap::new(),
         match_flow: HashMap::new(),
         end_flow: HashMap::new(),
+        assets: Default::default(),
     }
 }
 
