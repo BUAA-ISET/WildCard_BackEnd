@@ -84,7 +84,11 @@ impl MatchHistoryRecord {
     pub fn with_result_for_player(mut self, player_id: &str) -> Self {
         self.result = if self.winner_ids.is_empty() {
             MatchResult::Draw
-        } else if self.winner_ids.iter().any(|winner_id| winner_id == player_id) {
+        } else if self
+            .winner_ids
+            .iter()
+            .any(|winner_id| winner_id == player_id)
+        {
             MatchResult::Win
         } else {
             MatchResult::Lose

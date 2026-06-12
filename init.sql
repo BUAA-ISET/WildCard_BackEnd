@@ -94,6 +94,25 @@ CREATE TABLE IF NOT EXISTS rule_reviews (
 CREATE INDEX IF NOT EXISTS idx_rule_reviews_rule_created
     ON rule_reviews(rule_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS reports (
+    id UUID PRIMARY KEY,
+    reporter_id VARCHAR(128) NOT NULL,
+    reporter_name VARCHAR(255) NOT NULL DEFAULT '',
+    reporter_avatar VARCHAR(512) NOT NULL DEFAULT '',
+    target_type VARCHAR(32) NOT NULL,
+    target_id VARCHAR(255) NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    details TEXT NOT NULL DEFAULT '',
+    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    action_log JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_reports_status_created
+    ON reports(status, created_at DESC);
+
 -- 首任管理员：保证 Tanhhhhtjy 始终拥有 admin 角色（手动改回 user 不会被覆盖，
 -- 因为应用启动时使用了 AND role <> 'admin' 守卫；init.sql 仅用于全新部署）。
 UPDATE users SET role = 'admin' WHERE name = 'Tanhhhhtjy';

@@ -7,6 +7,7 @@ use crate::domain::game::GameSession;
 use crate::infrastructure::email::EmailSender;
 use crate::infrastructure::user::UserRepository;
 use crate::interface::replay::{ReplayPersistence, ReplayStore};
+use crate::interface::report::ReportPersistence;
 use crate::interface::room::RoomRepository;
 use crate::interface::rule::{RulePersistence, RuleRepository};
 
@@ -65,6 +66,14 @@ impl FromRef<GlobalState> for RuleStore {
 impl FromRef<GlobalState> for RulePersistence {
     fn from_ref(input: &GlobalState) -> Self {
         RulePersistence {
+            pool: input.user.pool.clone(),
+        }
+    }
+}
+
+impl FromRef<GlobalState> for ReportPersistence {
+    fn from_ref(input: &GlobalState) -> Self {
+        ReportPersistence {
             pool: input.user.pool.clone(),
         }
     }
