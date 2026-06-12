@@ -279,7 +279,11 @@ fn build_frame(session: &GameSession, index: u32, action: Option<ReplayAction>) 
         .as_ref()
         .map(|pending| pending.player_id.clone())
         .unwrap_or_else(|| {
-            let player_index = session.table.get("player_index").copied().unwrap_or_default();
+            let player_index = session
+                .table
+                .get("player_index")
+                .copied()
+                .unwrap_or_default();
             session
                 .players
                 .get(player_index.max(0) as usize)

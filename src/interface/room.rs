@@ -550,6 +550,7 @@ pub async fn choose_action(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn submit_game_action(
     player_id: String,
     rule_store: RuleStore,
@@ -603,7 +604,9 @@ async fn submit_game_action(
     )
     .await;
 
-    if session_snapshot.status == "finished" && let Some(room) = room_guard.rooms.get_mut(&room_code) {
+    if session_snapshot.status == "finished"
+        && let Some(room) = room_guard.rooms.get_mut(&room_code)
+    {
         reset_room_after_game(room);
     }
 

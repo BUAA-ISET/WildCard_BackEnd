@@ -5,7 +5,7 @@ mod interface;
 mod state;
 
 use crate::infrastructure::user::UserRepository;
-use crate::interface::{replay, market, room, rule, user};
+use crate::interface::{market, replay, report, room, rule, user};
 use crate::state::{GlobalState, JwtSecret};
 
 use axum::{
@@ -78,6 +78,11 @@ async fn main() {
         .ensure_schema()
         .await
         .expect("Failed to initialize replay store");
+
+    report::ReportPersistence { pool: pool.clone() }
+        .ensure_schema()
+        .await
+        .expect("Failed to initialize report store");
 
     let state = GlobalState {
         jwt_secret: JwtSecret(secret_key.into_bytes()),
@@ -216,6 +221,14 @@ async fn main() {
         .route("/api/games/{sessionId}", get(room::get_game))
         .route("/api/replays/history", get(replay::list_history))
         .route("/api/replays/{replayId}", get(replay::get_replay))
+        // 举报系统：counts 必须注册在 {id} 之前，否则 "counts" 会被当成 id 匹配。
+        .route(
+            "/api/reports",
+            post(report::submit_report).get(report::list_reports),
+        )
+        .route("/api/reports/counts", get(report::report_counts))
+        .route("/api/reports/{id}", get(report::get_report))
+        .route("/api/reports/{id}/action", post(report::action_report))
         .route(
             "/api/games/{sessionId}/actions/{actionId}/play-cards",
             post(room::play_cards),
