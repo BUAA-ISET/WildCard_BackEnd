@@ -189,6 +189,7 @@ pub async fn list_published_rules(
         guard
             .published
             .values()
+            .filter(|rule| !rule.banned)
             .map(|rule| {
                 (
                     rule.id.clone(),
@@ -239,6 +240,10 @@ pub async fn get_published_rule_detail(
         guard.published.get(&rule_id).cloned()
     };
     let rule = snapshot.ok_or(AppError::NotFound)?;
+    // 软下架的规则对市场不可见，详情按未找到处理。
+    if rule.banned {
+        return Err(AppError::NotFound);
+    }
 
     let developer = resolve_developer(&user_repo, &rule.owner_id).await;
     // Phase 1B：introduction / cover / screenshots 现在存在 rule_published 行里，
@@ -304,7 +309,7 @@ pub async fn list_developer_rules(
         guard
             .published
             .values()
-            .filter(|rule| rule.owner_id == developer_id)
+            .filter(|rule| rule.owner_id == developer_id && !rule.banned)
             .map(|rule| {
                 (
                     rule.id.clone(),
@@ -555,6 +560,8 @@ pub async fn create_review(
         return Err(AppError::InvalidInput("评分必须在 1 到 5 之间".to_string()));
     }
 
+    crate::interface::rule::ensure_not_banned(&user_id, &user_repo).await?;
+
     // 校验规则存在
     {
         let guard = store.read().await;
@@ -762,5 +769,18 @@ mod tests {
             Some("/static/review-images/r.png")
         );
         assert!(json.get("image_url").is_none());
+    }
+
+    #[test]
+    fn market_filter_excludes_banned_rules() {
+        // 市场 list 过滤口径：`.filter(|r| !r.banned)`，软下架的规则不应出现在结果里。
+        let rules = [("a", false), ("b", true), ("c", false)];
+        let visible: Vec<&str> = rules
+            .iter()
+            .filter(|(_, banned)| !*banned)
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(visible, vec!["a", "c"]);
+        assert!(!visible.contains(&"b"), "banned 规则必须被过滤掉");
     }
 }

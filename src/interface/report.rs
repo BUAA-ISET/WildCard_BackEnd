@@ -10,10 +10,14 @@ use uuid::Uuid;
 
 use crate::{
     domain::report::{Report, ReportAction, ReportActionLog, ReportStatus, ReportTargetType},
+    domain::user::UserId,
     error::AppError,
     infrastructure::user::UserRepository,
     interface::auth::TokenClaims,
-    interface::rule::{ApiResponse, ensure_admin},
+    interface::rule::{
+        ApiResponse, RulePersistence, can_ban_user, ensure_admin, ensure_not_banned,
+    },
+    state::RuleStore,
 };
 
 /// 提交举报请求体。字段逐字对齐 FE `SubmitReportPayload`。
@@ -342,6 +346,8 @@ pub async fn submit_report(
         return Err(AppError::InvalidInput("举报对象不能为空".to_string()));
     }
 
+    ensure_not_banned(&user_id, &user_repo).await?;
+
     // 信任 token 里的 user_id 当 reporter_id，name/avatar 优先查 user_repo，查不到用前端兜底。
     let (reporter_name, reporter_avatar) = match user_repo.find_by_id(&user_id).await {
         Ok(Some(user)) => (user.name, user.avatar),
@@ -433,17 +439,52 @@ pub async fn get_report(
 }
 
 /// POST /api/reports/{id}/action —— 仅管理员处理举报。
-/// dismiss → rejected；ban_user / ban_rule → resolved。只记状态 + 追加 action_log，不真正执行。
+/// dismiss → rejected；ban_user / ban_rule → resolved。除了记状态 + 追加 action_log，
+/// 还按 target_type + action 执行联动封禁：
+/// - ban_user：封禁被举报用户（拒绝封禁 admin）；
+/// - ban_rule：软下架被举报规则（DB + 内存标记 banned）；
+/// - dismiss：无联动。
+///
+/// 联动失败（如目标是 admin）会让整个请求失败，report 不被标 resolved。
 pub async fn action_report(
     TokenClaims { user_id, .. }: TokenClaims,
     State(persistence): State<ReportPersistence>,
     State(user_repo): State<Arc<UserRepository>>,
+    State(store): State<RuleStore>,
+    State(rule_persistence): State<RulePersistence>,
     Path(id): Path<String>,
     Json(payload): Json<ReportActionPayload>,
 ) -> Result<Json<ApiResponse<Report>>, AppError> {
     ensure_admin(&user_id, &user_repo).await?;
     let uuid = Uuid::parse_str(&id).map_err(|_| AppError::NotFound)?;
     let mut report = persistence.get(&uuid).await?.ok_or(AppError::NotFound)?;
+
+    // 先执行联动副作用：任何失败（如封禁 admin）都在更新 report 状态前返回，避免状态与现实不一致。
+    match payload.action {
+        ReportAction::BanUser => {
+            let target_uuid = Uuid::parse_str(report.target_id.trim()).map_err(|_| {
+                AppError::InvalidInput("封禁用户失败：举报对象 ID 不是合法用户 ID".to_string())
+            })?;
+            let target = user_repo
+                .find_by_id(&UserId(target_uuid))
+                .await?
+                .ok_or(AppError::NotFound)?;
+            can_ban_user(&target.role)?;
+            user_repo
+                .set_user_banned(&UserId(target_uuid), true)
+                .await?;
+        }
+        ReportAction::BanRule => {
+            let rule_id = report.target_id.clone();
+            // DB：软下架（builtin 规则不在 DB，UPDATE 影响 0 行无害）。
+            rule_persistence.set_rule_banned(&rule_id, true).await?;
+            // 内存：标记 banned，不 remove，保证 restore 时能找回。
+            if let Some(rule) = store.write().await.published.get_mut(&rule_id) {
+                rule.banned = true;
+            }
+        }
+        ReportAction::Dismiss => {}
+    }
 
     let now = now_millis();
     let status = payload.action.resulting_status();
@@ -718,5 +759,18 @@ mod tests {
             json.get("action").and_then(|v| v.as_str()),
             Some("ban_rule")
         );
+    }
+
+    #[test]
+    fn can_ban_user_rejects_admin_target() {
+        // 防误封：目标是 admin 必须返回 Forbidden。
+        let err = can_ban_user("admin").expect_err("封禁 admin 应被拒绝");
+        assert!(matches!(err, AppError::Forbidden(_)));
+    }
+
+    #[test]
+    fn can_ban_user_allows_normal_user_target() {
+        assert!(can_ban_user("user").is_ok());
+        assert!(can_ban_user("").is_ok());
     }
 }

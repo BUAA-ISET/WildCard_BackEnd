@@ -39,6 +39,7 @@ mod infrastructure {
             password: String,
             avatar: String,
             role: String,
+            banned: bool,
         }
 
         impl StoredUser {
@@ -50,6 +51,7 @@ mod infrastructure {
                     password: user.password,
                     avatar: user.avatar,
                     role: user.role,
+                    banned: user.banned,
                 }
             }
 
@@ -61,6 +63,7 @@ mod infrastructure {
                     password: self.password.clone(),
                     avatar: self.avatar.clone(),
                     role: self.role.clone(),
+                    banned: self.banned,
                 }
             }
         }
@@ -89,6 +92,17 @@ mod infrastructure {
                     .await
                     .get(&user_id.0)
                     .map(StoredUser::to_user))
+            }
+
+            pub async fn set_user_banned(
+                &self,
+                user_id: &UserId,
+                banned: bool,
+            ) -> Result<(), AppError> {
+                if let Some(user) = self.users.write().await.get_mut(&user_id.0) {
+                    user.banned = banned;
+                }
+                Ok(())
             }
         }
     }
@@ -147,6 +161,57 @@ mod interface {
                 Err(AppError::Forbidden("需要管理员权限".to_string()))
             }
         }
+
+        pub async fn ensure_not_banned(
+            user_id: &UserId,
+            user_repo: &Arc<UserRepository>,
+        ) -> Result<(), AppError> {
+            let user = user_repo
+                .find_by_id(user_id)
+                .await?
+                .ok_or(AppError::Unauthorized("用户不存在".to_string()))?;
+            if user.banned {
+                return Err(AppError::Forbidden(
+                    "账号已被封禁，无法执行该操作".to_string(),
+                ));
+            }
+            Ok(())
+        }
+
+        pub fn can_ban_user(target_role: &str) -> Result<(), AppError> {
+            if target_role == "admin" {
+                return Err(AppError::Forbidden("不能封禁管理员账号".to_string()));
+            }
+            Ok(())
+        }
+
+        /// 最小化的已发布规则：报表联动只读 / 写 `banned` 字段。
+        #[derive(Debug, Default, Clone)]
+        pub struct PublishedRule {
+            pub id: String,
+            pub banned: bool,
+        }
+
+        #[derive(Debug, Default)]
+        pub struct RuleRepository {
+            pub published: std::collections::HashMap<String, PublishedRule>,
+        }
+
+        #[derive(Clone)]
+        pub struct RulePersistence {
+            pub pool: sqlx::PgPool,
+        }
+
+        impl RulePersistence {
+            pub async fn set_rule_banned(
+                &self,
+                _rule_id: &str,
+                _banned: bool,
+            ) -> Result<(), AppError> {
+                // 联动测试只覆盖到达此处前的分支（鉴权 / 防误封），不真正打 DB。
+                Ok(())
+            }
+        }
     }
 
     pub mod report {
@@ -155,6 +220,16 @@ mod interface {
             "/src/interface/report.rs"
         ));
     }
+}
+
+mod state {
+    use std::sync::Arc;
+
+    use tokio::sync::RwLock;
+
+    use crate::interface::rule::RuleRepository;
+
+    pub type RuleStore = Arc<RwLock<RuleRepository>>;
 }
 
 use domain::{
@@ -187,6 +262,7 @@ fn user(id: Uuid, name: &str, role: &str) -> User {
         password: "hashed".to_string(),
         avatar: format!("/static/avatars/{name}.png"),
         role: role.to_string(),
+        banned: false,
     }
 }
 
@@ -351,6 +427,14 @@ async fn non_admin_cannot_process_report_action_before_database_lookup() {
         State(Arc::new(UserRepository::with_users(vec![user(
             user_id, "regular", "user",
         )]))),
+        State(Arc::new(tokio::sync::RwLock::new(
+            interface::rule::RuleRepository::default(),
+        ))),
+        State(interface::rule::RulePersistence {
+            pool: PgPoolOptions::new()
+                .connect_lazy("postgres://user:password@127.0.0.1:1/wildcard_test")
+                .unwrap(),
+        }),
         axum::extract::Path(Uuid::new_v4().to_string()),
         Json(ReportActionPayload {
             action: ReportAction::Dismiss,

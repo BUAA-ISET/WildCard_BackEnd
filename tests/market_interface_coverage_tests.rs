@@ -30,8 +30,18 @@ mod infrastructure {
         }
 
         impl UserRepository {
-            pub async fn find_by_id(&self, _user_id: &UserId) -> Result<Option<User>, AppError> {
-                Ok(None)
+            pub async fn find_by_id(&self, user_id: &UserId) -> Result<Option<User>, AppError> {
+                // 默认返回一个未封禁的普通用户，让 create_review 的 ban 校验通过，
+                // 以便测试覆盖到后续的评分 / 规则存在性 / 图片长度分支。
+                Ok(Some(User {
+                    id: UserId(user_id.0),
+                    name: "market-user".to_string(),
+                    email: "market@example.com".to_string(),
+                    password: "hashed".to_string(),
+                    avatar: String::new(),
+                    role: "user".to_string(),
+                    banned: false,
+                }))
             }
         }
     }
@@ -107,11 +117,27 @@ mod interface {
             pub introduction: String,
             pub cover_url: String,
             pub screenshot_urls: Vec<String>,
+            pub banned: bool,
         }
 
         #[derive(Debug, Default)]
         pub struct RuleRepository {
             pub published: HashMap<String, PublishedRule>,
+        }
+
+        pub async fn ensure_not_banned(
+            user_id: &crate::domain::user::UserId,
+            user_repo: &std::sync::Arc<crate::infrastructure::user::UserRepository>,
+        ) -> Result<(), crate::error::AppError> {
+            let user = user_repo.find_by_id(user_id).await?.ok_or(
+                crate::error::AppError::Unauthorized("用户不存在".to_string()),
+            )?;
+            if user.banned {
+                return Err(crate::error::AppError::Forbidden(
+                    "账号已被封禁，无法执行该操作".to_string(),
+                ));
+            }
+            Ok(())
         }
     }
 
@@ -215,6 +241,7 @@ mod interface {
                     introduction: format!("{name} intro"),
                     cover_url: format!("/static/rule-images/{id}.png"),
                     screenshot_urls: vec![format!("/static/rule-images/{id}-1.png")],
+                    banned: false,
                 }
             }
 

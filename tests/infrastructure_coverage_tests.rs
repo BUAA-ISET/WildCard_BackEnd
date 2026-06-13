@@ -156,6 +156,7 @@ mod infrastructure {
                     password: "secret".to_string(),
                     avatar: String::new(),
                     role: "user".to_string(),
+                    banned: false,
                 }
             }
 
