@@ -4,11 +4,13 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(255) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
     avatar VARCHAR(512) NOT NULL DEFAULT '',
-    role VARCHAR(16) NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin'))
+    role VARCHAR(16) NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
+    banned BOOLEAN NOT NULL DEFAULT false
 );
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar VARCHAR(512) NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'user';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_users_name ON users(name);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -52,6 +54,7 @@ CREATE TABLE IF NOT EXISTS rule_published (
     introduction TEXT NOT NULL DEFAULT '',
     cover_url VARCHAR(512) NOT NULL DEFAULT '',
     screenshot_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
+    banned BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -59,6 +62,7 @@ CREATE TABLE IF NOT EXISTS rule_published (
 ALTER TABLE rule_published ADD COLUMN IF NOT EXISTS introduction TEXT NOT NULL DEFAULT '';
 ALTER TABLE rule_published ADD COLUMN IF NOT EXISTS cover_url VARCHAR(512) NOT NULL DEFAULT '';
 ALTER TABLE rule_published ADD COLUMN IF NOT EXISTS screenshot_urls JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE rule_published ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_rule_published_owner_updated
     ON rule_published(owner_id, updated_at DESC);

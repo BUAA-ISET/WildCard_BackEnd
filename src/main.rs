@@ -183,6 +183,11 @@ async fn main() {
             "/api/admin/rules/{draft_id}/reject",
             post(rule::reject_draft),
         )
+        .route("/api/admin/users/{user_id}/unban", post(rule::unban_user))
+        .route(
+            "/api/admin/rules/{rule_id}/restore",
+            post(rule::restore_rule),
+        )
         .route("/api/rules/published", get(market::list_published_rules))
         .route(
             "/api/rules/published/{rule_id}",

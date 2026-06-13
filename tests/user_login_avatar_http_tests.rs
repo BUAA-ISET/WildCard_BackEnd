@@ -72,6 +72,7 @@ mod infrastructure {
                     password: self.password,
                     avatar: self.avatar,
                     role: "user".to_string(),
+                    banned: false,
                 }
             }
         }

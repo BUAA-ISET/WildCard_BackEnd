@@ -60,6 +60,7 @@ mod infrastructure {
                     password: self.password,
                     avatar: self.avatar,
                     role: self.role,
+                    banned: false,
                 }
             }
         }
@@ -264,6 +265,7 @@ fn user(id: Uuid, name: &str) -> User {
         password: "hashed".to_string(),
         avatar: format!("/{name}.png"),
         role: "user".to_string(),
+        banned: false,
     }
 }
 

@@ -42,6 +42,7 @@ mod infrastructure {
             password: String,
             avatar: String,
             role: String,
+            banned: bool,
         }
 
         impl StoredUser {
@@ -53,6 +54,7 @@ mod infrastructure {
                     password: self.password,
                     avatar: self.avatar,
                     role: self.role,
+                    banned: self.banned,
                 }
             }
         }
@@ -78,6 +80,7 @@ mod infrastructure {
                                         password: user.password,
                                         avatar: user.avatar,
                                         role: user.role,
+                                        banned: user.banned,
                                     },
                                 )
                             })
@@ -94,6 +97,17 @@ mod infrastructure {
                     .get(&user_id.0)
                     .cloned()
                     .map(StoredUser::into_user))
+            }
+
+            pub async fn set_user_banned(
+                &self,
+                user_id: &UserId,
+                banned: bool,
+            ) -> Result<(), AppError> {
+                if let Some(user) = self.users.write().await.get_mut(&user_id.0) {
+                    user.banned = banned;
+                }
+                Ok(())
             }
         }
     }
@@ -211,6 +225,7 @@ fn published_rule(id: &str, name: &str) -> PublishedRule {
         introduction: "intro".to_string(),
         cover_url: "/static/rule-images/cover.png".to_string(),
         screenshot_urls: vec!["/static/rule-images/shot.png".to_string()],
+        banned: false,
     }
 }
 
@@ -253,6 +268,19 @@ fn persistence() -> RulePersistence {
             .connect_lazy("postgres://user:password@localhost/wildcard_test")
             .unwrap(),
     }
+}
+
+/// 给写接口的 ban 校验用：一个含指定 user（默认未封禁）的内存 repo。
+fn repo_with(user_id: Uuid) -> Arc<UserRepository> {
+    Arc::new(UserRepository::with_users(vec![User {
+        id: UserId(user_id),
+        name: "writer".to_string(),
+        email: "writer@example.com".to_string(),
+        password: "hashed".to_string(),
+        avatar: String::new(),
+        role: "user".to_string(),
+        banned: false,
+    }]))
 }
 
 #[tokio::test]
@@ -312,6 +340,7 @@ async fn rule_write_paths_exercise_early_errors_without_database() {
         claims(owner),
         State(store.clone()),
         State(persistence()),
+        State(repo_with(owner)),
         Path("pending".to_string()),
     )
     .await
@@ -345,6 +374,7 @@ async fn rule_write_paths_exercise_early_errors_without_database() {
         claims(owner),
         State(store.clone()),
         State(persistence()),
+        State(repo_with(owner)),
         Path("invalid".to_string()),
     )
     .await
@@ -355,6 +385,7 @@ async fn rule_write_paths_exercise_early_errors_without_database() {
         claims(owner),
         State(store.clone()),
         State(persistence()),
+        State(repo_with(owner)),
         Json(SaveRuleDraftRequest {
             name: "bad".to_string(),
             player_count: 2,
@@ -373,6 +404,7 @@ async fn rule_write_paths_exercise_early_errors_without_database() {
         claims(owner),
         State(store),
         State(persistence()),
+        State(repo_with(owner)),
         Path("pending".to_string()),
         Json(SaveRuleDraftRequest {
             name: "War".to_string(),
@@ -406,6 +438,7 @@ async fn fork_and_options_paths_cover_sorting_and_pre_persistence_validation() {
         claims(owner),
         State(store.clone()),
         State(persistence()),
+        State(repo_with(owner)),
         Path("missing".to_string()),
         Json(ForkRuleRequest {
             name: "copy".to_string(),
@@ -419,6 +452,7 @@ async fn fork_and_options_paths_cover_sorting_and_pre_persistence_validation() {
         claims(owner),
         State(store.clone()),
         State(persistence()),
+        State(repo_with(owner)),
         Path("classic".to_string()),
         Json(ForkRuleRequest {
             name: "x".repeat(300),
@@ -448,6 +482,7 @@ async fn admin_endpoints_stop_on_auth_guard_with_fake_repository() {
         password: "hashed".to_string(),
         avatar: String::new(),
         role: "user".to_string(),
+        banned: false,
     };
     let repo = Arc::new(UserRepository::with_users(vec![normal_user]));
     let store = store_with(
@@ -579,6 +614,7 @@ async fn admin_review_success_and_conflict_paths_cover_authorized_flow() {
         password: "hashed".to_string(),
         avatar: String::new(),
         role: "admin".to_string(),
+        banned: false,
     };
     let owner = User {
         id: UserId(owner_id),
@@ -587,6 +623,7 @@ async fn admin_review_success_and_conflict_paths_cover_authorized_flow() {
         password: "hashed".to_string(),
         avatar: String::new(),
         role: "user".to_string(),
+        banned: false,
     };
     let repo = Arc::new(UserRepository::with_users(vec![admin, owner]));
     let mut pending_old = draft(owner_id, "pending-old", RuleStatus::PendingReview, 1);
@@ -688,6 +725,7 @@ async fn valid_author_write_paths_reach_persistence_error_branches() {
         claims(owner),
         State(store_with(Vec::new(), Vec::new())),
         State(failing_persistence()),
+        State(repo_with(owner)),
         Json(valid_save_payload("Save Valid")),
     )
     .await
@@ -703,6 +741,7 @@ async fn valid_author_write_paths_reach_persistence_error_branches() {
         claims(owner),
         State(update_store),
         State(failing_persistence()),
+        State(repo_with(owner)),
         Path(update_id),
         Json(valid_save_payload("Update Valid")),
     )
@@ -736,6 +775,7 @@ async fn valid_author_write_paths_reach_persistence_error_branches() {
         claims(owner),
         State(submit_store),
         State(failing_persistence()),
+        State(repo_with(owner)),
         Path(submit_id),
     )
     .await
@@ -754,6 +794,7 @@ async fn admin_approve_reject_pending_paths_reach_persistence_error_branches() {
         password: "hashed".to_string(),
         avatar: String::new(),
         role: "admin".to_string(),
+        banned: false,
     };
     let repo = Arc::new(UserRepository::with_users(vec![admin]));
 

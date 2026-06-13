@@ -142,6 +142,9 @@ pub struct PublishedRule {
     pub cover_url: String,
     #[serde(default, rename = "screenshotUrls")]
     pub screenshot_urls: Vec<String>,
+    /// 软下架标记。仅供市场过滤用，前端不需要这个字段，跳过序列化。
+    #[serde(skip)]
+    pub banned: bool,
 }
 
 #[derive(Debug, Default)]
@@ -234,8 +237,10 @@ pub async fn save_draft(
     TokenClaims { user_id, .. }: TokenClaims,
     State(store): State<RuleStore>,
     State(persistence): State<RulePersistence>,
+    State(user_repo): State<Arc<UserRepository>>,
     Json(payload): Json<SaveRuleDraftRequest>,
 ) -> Result<Json<ApiResponse<SaveDraftResponse>>, AppError> {
+    ensure_not_banned(&user_id, &user_repo).await?;
     // 保存草稿时就解析一次，尽早把前端 JSON 中的结构错误反馈给用户。
     RuleEngine::parse(
         payload.name.clone(),
@@ -279,9 +284,11 @@ pub async fn update_draft(
     TokenClaims { user_id, .. }: TokenClaims,
     State(store): State<RuleStore>,
     State(persistence): State<RulePersistence>,
+    State(user_repo): State<Arc<UserRepository>>,
     Path(draft_id): Path<String>,
     Json(payload): Json<SaveRuleDraftRequest>,
 ) -> Result<Json<ApiResponse<SaveDraftResponse>>, AppError> {
+    ensure_not_banned(&user_id, &user_repo).await?;
     let runtime = RuleEngine::parse(
         payload.name.clone(),
         payload.player_count,
@@ -378,8 +385,10 @@ pub async fn submit_review(
     TokenClaims { user_id, .. }: TokenClaims,
     State(store): State<RuleStore>,
     State(persistence): State<RulePersistence>,
+    State(user_repo): State<Arc<UserRepository>>,
     Path(draft_id): Path<String>,
 ) -> Result<Json<ApiResponse<SaveDraftResponse>>, AppError> {
+    ensure_not_banned(&user_id, &user_repo).await?;
     // 提交前再 parse 一遍，提前把 design 错误暴露给作者，省得审核员看到一份本就跑不通的规则。
     let mut guard = store.write().await;
     let draft = guard.drafts.get_mut(&draft_id).ok_or(AppError::NotFound)?;
@@ -421,9 +430,10 @@ pub async fn publish_draft(
     claims: TokenClaims,
     store: State<RuleStore>,
     persistence: State<RulePersistence>,
+    user_repo: State<Arc<UserRepository>>,
     path: Path<String>,
 ) -> Result<Json<ApiResponse<SaveDraftResponse>>, AppError> {
-    submit_review(claims, store, persistence, path).await
+    submit_review(claims, store, persistence, user_repo, path).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -511,6 +521,63 @@ pub async fn ensure_admin(user_id: &UserId, user_repo: &UserRepository) -> Resul
         return Err(AppError::Forbidden("仅管理员可执行此操作".to_string()));
     }
     Ok(())
+}
+
+/// 写接口（发草稿 / 提审 / 发评论 / 提交举报 / Fork）入口处校验：被封禁用户禁止写操作。
+/// 只在写接口处查一次库，鉴权层（TokenClaims）不查库以避免每次请求多一次 DB 往返。
+pub async fn ensure_not_banned(
+    user_id: &UserId,
+    user_repo: &UserRepository,
+) -> Result<(), AppError> {
+    let user = user_repo
+        .find_by_id(user_id)
+        .await?
+        .ok_or(AppError::Unauthorized("用户不存在".to_string()))?;
+    if user.banned {
+        return Err(AppError::Forbidden(
+            "账号已被封禁，无法执行该操作".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// 防误封纯函数：禁止封禁管理员账号。抽出来便于单测 action_report 联动逻辑。
+pub fn can_ban_user(target_role: &str) -> Result<(), AppError> {
+    if target_role == "admin" {
+        return Err(AppError::Forbidden("不能封禁管理员账号".to_string()));
+    }
+    Ok(())
+}
+
+/// POST /api/admin/users/{user_id}/unban —— 仅管理员，解除用户封禁（可逆，不删数据）。
+pub async fn unban_user(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(user_repo): State<Arc<UserRepository>>,
+    Path(target_id): Path<String>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    ensure_admin(&user_id, &user_repo).await?;
+    let target_uuid = Uuid::parse_str(target_id.trim())
+        .map_err(|_| AppError::InvalidInput("用户 ID 不是合法 UUID".to_string()))?;
+    user_repo
+        .set_user_banned(&UserId(target_uuid), false)
+        .await?;
+    Ok(Json(ApiResponse::success(())))
+}
+
+/// POST /api/admin/rules/{rule_id}/restore —— 仅管理员，恢复软下架规则（可逆，不删数据）。
+pub async fn restore_rule(
+    TokenClaims { user_id, .. }: TokenClaims,
+    State(store): State<RuleStore>,
+    State(persistence): State<RulePersistence>,
+    State(user_repo): State<Arc<UserRepository>>,
+    Path(rule_id): Path<String>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    ensure_admin(&user_id, &user_repo).await?;
+    persistence.set_rule_banned(&rule_id, false).await?;
+    if let Some(rule) = store.write().await.published.get_mut(&rule_id) {
+        rule.banned = false;
+    }
+    Ok(Json(ApiResponse::success(())))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -663,6 +730,7 @@ pub async fn approve_draft(
         introduction: draft.introduction.clone(),
         cover_url: draft.cover_url.clone(),
         screenshot_urls: draft.screenshot_urls.clone(),
+        banned: false,
     };
 
     persistence.save_draft(draft).await?;
@@ -766,9 +834,11 @@ pub async fn fork_published_rule(
     TokenClaims { user_id, .. }: TokenClaims,
     State(store): State<RuleStore>,
     State(persistence): State<RulePersistence>,
+    State(user_repo): State<Arc<UserRepository>>,
     Path(rule_id): Path<String>,
     Json(payload): Json<ForkRuleRequest>,
 ) -> Result<Json<ApiResponse<SaveDraftResponse>>, AppError> {
+    ensure_not_banned(&user_id, &user_repo).await?;
     // 1. 拿到源规则，复制必要字段后立刻释放读锁，避免 save_draft 期间长时间占用。
     let source = {
         let guard = store.read().await;
@@ -974,6 +1044,17 @@ impl RulePersistence {
         .await
         .inspect_err(|e| tracing::warn!("Database error {e}"))?;
 
+        // 封禁联动：users 表加 banned 标记，默认 false，幂等升级。
+        sqlx::query(
+            r#"
+            ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT false
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
         // 首任管理员 boot-strap：仅当 Tanhhhhtjy 当前不是 admin 时才更新，
         // 避免覆盖运维手动改过的角色（例如临时降级）。这条 UPDATE 在用户表为空时是 no-op。
         sqlx::query(
@@ -1045,6 +1126,17 @@ impl RulePersistence {
             r#"
             ALTER TABLE rule_published
                 ADD COLUMN IF NOT EXISTS screenshot_urls JSONB NOT NULL DEFAULT '[]'::jsonb
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        // 软下架联动：rule_published 表加 banned 标记，默认 false，幂等升级。
+        sqlx::query(
+            r#"
+            ALTER TABLE rule_published
+                ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT false
             "#,
         )
         .execute(&self.pool)
@@ -1132,6 +1224,7 @@ impl RulePersistence {
                 introduction,
                 cover_url,
                 screenshot_urls,
+                banned,
                 (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_at,
                 (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_at
             FROM rule_published
@@ -1174,6 +1267,7 @@ impl RulePersistence {
                 introduction: row.get("introduction"),
                 cover_url: row.get("cover_url"),
                 screenshot_urls,
+                banned: row.get("banned"),
             };
             repository
                 .published
@@ -1266,13 +1360,13 @@ impl RulePersistence {
             r#"
             INSERT INTO rule_published (
                 id, draft_id, owner_id, name, player_count, description, version,
-                design, introduction, cover_url, screenshot_urls,
+                design, introduction, cover_url, screenshot_urls, banned,
                 created_at, updated_at
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                to_timestamp($12::double precision / 1000.0),
-                to_timestamp($13::double precision / 1000.0)
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                to_timestamp($13::double precision / 1000.0),
+                to_timestamp($14::double precision / 1000.0)
             )
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -1297,12 +1391,32 @@ impl RulePersistence {
         .bind(&rule.introduction)
         .bind(&rule.cover_url)
         .bind(screenshot_urls)
+        .bind(rule.banned)
         .bind(rule.created_at)
         .bind(rule.updated_at)
         .execute(&self.pool)
         .await
         .inspect_err(|e| tracing::warn!("Database error {e}"))?;
 
+        Ok(())
+    }
+
+    /// 标记 / 解除规则软下架。只改 banned 字段不删行，因此可逆。
+    /// rule_id 可能是 "rule_<uuid>" / 裸 UUID / builtin 字符串：
+    /// 前两种剥前缀后 parse UUID 去更新 DB；builtin 规则不在 DB（UPDATE 影响 0 行，无害），
+    /// 内存标记由调用方负责。
+    pub async fn set_rule_banned(&self, rule_id: &str, banned: bool) -> Result<(), AppError> {
+        let rule_uuid_str = rule_id.strip_prefix("rule_").unwrap_or(rule_id);
+        let Ok(rule_uuid) = Uuid::parse_str(rule_uuid_str) else {
+            // builtin 规则等非 UUID id 在 DB 没有对应行，直接跳过 DB 更新。
+            return Ok(());
+        };
+        sqlx::query("UPDATE rule_published SET banned = $1 WHERE id = $2")
+            .bind(banned)
+            .bind(rule_uuid)
+            .execute(&self.pool)
+            .await
+            .inspect_err(|e| tracing::warn!("Database error {e}"))?;
         Ok(())
     }
 
@@ -1404,6 +1518,7 @@ fn build_builtin_test_rule() -> Option<PublishedRule> {
         introduction: String::new(),
         cover_url: String::new(),
         screenshot_urls: Vec::new(),
+        banned: false,
     })
 }
 
@@ -1538,6 +1653,7 @@ fn build_builtin_rule(
         introduction: String::new(),
         cover_url: String::new(),
         screenshot_urls: Vec::new(),
+        banned: false,
     })
 }
 
@@ -1575,6 +1691,7 @@ mod tests {
             introduction: String::new(),
             cover_url: String::new(),
             screenshot_urls: Vec::new(),
+            banned: false,
         }
     }
 
@@ -1582,6 +1699,21 @@ mod tests {
     fn fork_request_deserializes_minimal_payload() {
         let req: ForkRuleRequest = serde_json::from_str(r#"{"name":"我的副本"}"#).unwrap();
         assert_eq!(req.name, "我的副本");
+    }
+
+    #[test]
+    fn published_rule_skips_banned_field_in_serialization() {
+        // banned 标记 #[serde(skip)]，市场 JSON 里不应出现这个字段。
+        let mut rule = sample_published_rule("rule_x", "测试规则");
+        rule.banned = true;
+        let json = serde_json::to_value(&rule).unwrap();
+        assert!(json.get("banned").is_none(), "banned 不应被序列化给前端");
+    }
+
+    #[test]
+    fn can_ban_user_rejects_admin() {
+        assert!(can_ban_user("admin").is_err());
+        assert!(can_ban_user("user").is_ok());
     }
 
     #[test]
@@ -2081,6 +2213,7 @@ mod tests {
             introduction: draft.introduction.clone(),
             cover_url: draft.cover_url.clone(),
             screenshot_urls: draft.screenshot_urls.clone(),
+            banned: false,
         }
     }
 

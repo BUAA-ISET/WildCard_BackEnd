@@ -41,6 +41,8 @@ pub struct UserDto {
     pub email: String,
     pub avatar: String,
     pub role: String,
+    #[serde(default)]
+    pub banned: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
 }
@@ -53,6 +55,7 @@ impl UserDto {
             email: user.email,
             avatar: user.avatar,
             role: user.role,
+            banned: user.banned,
             token: None,
         }
     }
@@ -359,6 +362,7 @@ pub async fn register(
         avatar: String::new(),
         // 新注册一律是普通用户；首任管理员靠 init.sql / ensure_schema 的 UPDATE Tanhhhhtjy 完成。
         role: "user".to_string(),
+        banned: false,
     };
     user_repo.register(user).await?;
 
@@ -402,6 +406,11 @@ pub async fn login(
         let is_valid = UserRepository::check_password(&password, &user.password);
         if !is_valid {
             return Err(AppError::InvalidInput("账号或密码错误".to_string()));
+        }
+
+        // 封禁拦截：密码正确但账号已封禁，拒绝登录（解封后可重新登录）。
+        if user.banned {
+            return Err(AppError::Forbidden("账号已被封禁".to_string()));
         }
 
         let token = build_token(user.id.clone(), &jwt_secret)?;
@@ -791,6 +800,7 @@ mod tests {
             password: "hashed".to_string(),
             avatar: "/avatar.png".to_string(),
             role: "admin".to_string(),
+            banned: false,
         };
 
         let dto = UserDto::from_user(user);
@@ -809,6 +819,7 @@ mod tests {
             password: "hashed".to_string(),
             avatar: "/avatar.png".to_string(),
             role: "admin".to_string(),
+            banned: false,
         };
 
         let dto = UserDto::from_user_with_token(user, "jwt-token".to_string());
