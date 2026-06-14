@@ -510,7 +510,9 @@ mod interface {
                 .await
                 .unwrap_err();
 
-                assert!(matches!(err, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作"));
+                assert!(
+                    matches!(err, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作")
+                );
             }
         }
     }

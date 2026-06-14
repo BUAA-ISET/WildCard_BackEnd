@@ -801,7 +801,9 @@ async fn banned_author_write_paths_stop_before_persistence() {
     )
     .await
     .unwrap_err();
-    assert!(matches!(save_error, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作"));
+    assert!(
+        matches!(save_error, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作")
+    );
 
     let update_id = Uuid::new_v4().to_string();
     let update_error = rule::update_draft(
@@ -817,7 +819,9 @@ async fn banned_author_write_paths_stop_before_persistence() {
     )
     .await
     .unwrap_err();
-    assert!(matches!(update_error, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作"));
+    assert!(
+        matches!(update_error, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作")
+    );
 
     let submit_id = Uuid::new_v4().to_string();
     let submit_error = rule::submit_review(
@@ -832,7 +836,9 @@ async fn banned_author_write_paths_stop_before_persistence() {
     )
     .await
     .unwrap_err();
-    assert!(matches!(submit_error, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作"));
+    assert!(
+        matches!(submit_error, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作")
+    );
 
     let fork_error = rule::fork_published_rule(
         claims(owner),
@@ -849,7 +855,9 @@ async fn banned_author_write_paths_stop_before_persistence() {
     )
     .await
     .unwrap_err();
-    assert!(matches!(fork_error, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作"));
+    assert!(
+        matches!(fork_error, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作")
+    );
 }
 
 #[tokio::test]
