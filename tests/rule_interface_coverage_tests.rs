@@ -272,14 +272,18 @@ fn persistence() -> RulePersistence {
 
 /// 给写接口的 ban 校验用：一个含指定 user（默认未封禁）的内存 repo。
 fn repo_with(user_id: Uuid) -> Arc<UserRepository> {
+    repo_with_state(user_id, "user", false)
+}
+
+fn repo_with_state(user_id: Uuid, role: &str, banned: bool) -> Arc<UserRepository> {
     Arc::new(UserRepository::with_users(vec![User {
         id: UserId(user_id),
         name: "writer".to_string(),
         email: "writer@example.com".to_string(),
         password: "hashed".to_string(),
         avatar: String::new(),
-        role: "user".to_string(),
-        banned: false,
+        role: role.to_string(),
+        banned,
     }]))
 }
 
@@ -781,6 +785,109 @@ async fn valid_author_write_paths_reach_persistence_error_branches() {
     .await
     .unwrap_err();
     assert!(matches!(submit_error, AppError::DatabaseError(_)));
+}
+
+#[tokio::test]
+async fn banned_author_write_paths_stop_before_persistence() {
+    let owner = Uuid::new_v4();
+    let banned_repo = repo_with_state(owner, "user", true);
+
+    let save_error = rule::save_draft(
+        claims(owner),
+        State(store_with(Vec::new(), Vec::new())),
+        State(failing_persistence()),
+        State(banned_repo.clone()),
+        Json(valid_save_payload("Save Valid")),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(save_error, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作"));
+
+    let update_id = Uuid::new_v4().to_string();
+    let update_error = rule::update_draft(
+        claims(owner),
+        State(store_with(
+            vec![draft(owner, &update_id, RuleStatus::Draft, 1)],
+            Vec::new(),
+        )),
+        State(failing_persistence()),
+        State(banned_repo.clone()),
+        Path(update_id),
+        Json(valid_save_payload("Update Valid")),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(update_error, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作"));
+
+    let submit_id = Uuid::new_v4().to_string();
+    let submit_error = rule::submit_review(
+        claims(owner),
+        State(store_with(
+            vec![draft(owner, &submit_id, RuleStatus::Draft, 1)],
+            Vec::new(),
+        )),
+        State(failing_persistence()),
+        State(banned_repo.clone()),
+        Path(submit_id),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(submit_error, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作"));
+
+    let fork_error = rule::fork_published_rule(
+        claims(owner),
+        State(store_with(
+            Vec::new(),
+            vec![published_rule("published-source", "Published Source")],
+        )),
+        State(failing_persistence()),
+        State(banned_repo),
+        Path("published-source".to_string()),
+        Json(ForkRuleRequest {
+            name: "My Copy".to_string(),
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(fork_error, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作"));
+}
+
+#[tokio::test]
+async fn admin_can_unban_user_through_handler() {
+    let admin_id = Uuid::new_v4();
+    let target_id = Uuid::new_v4();
+    let repo = Arc::new(UserRepository::with_users(vec![
+        User {
+            id: UserId(admin_id),
+            name: "Admin".to_string(),
+            email: "admin@example.com".to_string(),
+            password: "hashed".to_string(),
+            avatar: String::new(),
+            role: "admin".to_string(),
+            banned: false,
+        },
+        User {
+            id: UserId(target_id),
+            name: "Writer".to_string(),
+            email: "writer@example.com".to_string(),
+            password: "hashed".to_string(),
+            avatar: String::new(),
+            role: "user".to_string(),
+            banned: true,
+        },
+    ]));
+
+    let Json(response) = rule::unban_user(
+        claims(admin_id),
+        State(repo.clone()),
+        Path(target_id.to_string()),
+    )
+    .await
+    .unwrap();
+
+    assert!(response.success);
+    let target = repo.find_by_id(&UserId(target_id)).await.unwrap().unwrap();
+    assert!(!target.banned, "解封接口应把 banned 标记清回 false");
 }
 
 #[tokio::test]

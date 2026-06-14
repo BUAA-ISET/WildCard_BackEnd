@@ -27,9 +27,27 @@ mod infrastructure {
         #[derive(Debug)]
         pub struct UserRepository {
             pub pool: PgPool,
+            pub role: String,
+            pub banned: bool,
         }
 
         impl UserRepository {
+            pub fn regular(pool: PgPool) -> Self {
+                Self {
+                    pool,
+                    role: "user".to_string(),
+                    banned: false,
+                }
+            }
+
+            pub fn banned(pool: PgPool) -> Self {
+                Self {
+                    pool,
+                    role: "user".to_string(),
+                    banned: true,
+                }
+            }
+
             pub async fn find_by_id(&self, user_id: &UserId) -> Result<Option<User>, AppError> {
                 // 默认返回一个未封禁的普通用户，让 create_review 的 ban 校验通过，
                 // 以便测试覆盖到后续的评分 / 规则存在性 / 图片长度分支。
@@ -39,8 +57,8 @@ mod infrastructure {
                     email: "market@example.com".to_string(),
                     password: "hashed".to_string(),
                     avatar: String::new(),
-                    role: "user".to_string(),
-                    banned: false,
+                    role: self.role.clone(),
+                    banned: self.banned,
                 }))
             }
         }
@@ -269,7 +287,7 @@ mod interface {
             #[tokio::test]
             async fn list_detail_and_developer_paths_cover_filters_and_db_fallbacks() {
                 let pool = lazy_pool();
-                let user_repo = Arc::new(UserRepository { pool: pool.clone() });
+                let user_repo = Arc::new(UserRepository::regular(pool.clone()));
                 let persistence = RulePersistence { pool };
                 let store = store_with(vec![
                     published_rule("builtin-alpha", "builtin-owner", "Alpha", 10),
@@ -341,7 +359,7 @@ mod interface {
             #[tokio::test]
             async fn review_validation_and_upload_image_paths_cover_new_market_features() {
                 let pool = lazy_pool();
-                let user_repo = Arc::new(UserRepository { pool: pool.clone() });
+                let user_repo = Arc::new(UserRepository::regular(pool.clone()));
                 let persistence = RulePersistence { pool };
                 let store = store_with(vec![published_rule(
                     "builtin-alpha",
@@ -463,6 +481,36 @@ mod interface {
                     .unwrap();
                 assert_eq!(bad_response.status(), StatusCode::BAD_REQUEST);
                 tokio::fs::remove_dir_all(upload_root).await.unwrap();
+            }
+
+            #[tokio::test]
+            async fn banned_user_cannot_create_review_before_database_lookup() {
+                let pool = lazy_pool();
+                let user_repo = Arc::new(UserRepository::banned(pool.clone()));
+                let persistence = RulePersistence { pool };
+                let store = store_with(vec![published_rule(
+                    "builtin-alpha",
+                    "builtin-owner",
+                    "Alpha",
+                    10,
+                )]);
+
+                let err = create_review(
+                    claims(),
+                    State(user_repo),
+                    State(persistence),
+                    State(store),
+                    Path("builtin-alpha".to_string()),
+                    Json(CreateReviewRequest {
+                        rating: 5,
+                        content: "ok".to_string(),
+                        image_url: None,
+                    }),
+                )
+                .await
+                .unwrap_err();
+
+                assert!(matches!(err, AppError::Forbidden(message) if message == "账号已被封禁，无法执行该操作"));
             }
         }
     }
