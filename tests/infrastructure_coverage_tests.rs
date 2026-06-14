@@ -157,6 +157,7 @@ mod infrastructure {
                     avatar: String::new(),
                     role: "user".to_string(),
                     banned: false,
+                    banned_until: None,
                 }
             }
 

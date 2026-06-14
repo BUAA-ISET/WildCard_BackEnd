@@ -23,10 +23,13 @@ pub struct User {
     /// 不增加 SQL 解码层。校验集中在 ensure_admin / init.sql CHECK 约束里。
     #[serde(default = "default_role")]
     pub role: String,
-    /// 是否被封禁。封禁只标记不删数据，可解封。登录与写接口处校验此字段，
-    /// 鉴权（TokenClaims）不查库以免每次请求多一次 DB 往返。
+    /// 是否被封禁（旧 bool 列，保留兼容不再用于拦截判断）。封禁拦截改读 `banned_until`。
     #[serde(default)]
     pub banned: bool,
+    /// 封禁到期时间戳（毫秒）。None = 未封禁；有值且大于当前时间 = 封禁中。
+    /// 封禁 = 写 now + banDays*86400000；解封 = 置 None。可逆、不删数据。
+    #[serde(default)]
+    pub banned_until: Option<i64>,
 }
 
 fn default_role() -> String {
@@ -47,6 +50,7 @@ mod tests {
             avatar: String::new(),
             role: "user".to_string(),
             banned: true,
+            banned_until: Some(1_700_000_000_000),
         };
         let json = serde_json::to_value(&user).unwrap();
         assert_eq!(json.get("banned").and_then(|v| v.as_bool()), Some(true));

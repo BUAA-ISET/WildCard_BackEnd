@@ -5,12 +5,14 @@ CREATE TABLE IF NOT EXISTS users (
     password VARCHAR(255) NOT NULL,
     avatar VARCHAR(512) NOT NULL DEFAULT '',
     role VARCHAR(16) NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
-    banned BOOLEAN NOT NULL DEFAULT false
+    banned BOOLEAN NOT NULL DEFAULT false,
+    banned_until BIGINT
 );
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar VARCHAR(512) NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'user';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS banned_until BIGINT;
 
 CREATE INDEX IF NOT EXISTS idx_users_name ON users(name);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -110,12 +112,33 @@ CREATE TABLE IF NOT EXISTS reports (
     status VARCHAR(32) NOT NULL DEFAULT 'pending',
     context JSONB NOT NULL DEFAULT '{}'::jsonb,
     action_log JSONB NOT NULL DEFAULT '[]'::jsonb,
+    merged_by_punishment_id VARCHAR(128),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS merged_by_punishment_id VARCHAR(128);
+
 CREATE INDEX IF NOT EXISTS idx_reports_status_created
     ON reports(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS punishments (
+    id UUID PRIMARY KEY,
+    report_id UUID NOT NULL,
+    action VARCHAR(16) NOT NULL,
+    scope VARCHAR(8) NOT NULL,
+    active BOOLEAN NOT NULL DEFAULT true,
+    ban_days INT,
+    banned_until BIGINT,
+    rule_removed BOOLEAN NOT NULL DEFAULT false,
+    target_user_id VARCHAR(128),
+    target_rule_id VARCHAR(128),
+    affected_report_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at BIGINT NOT NULL,
+    revoked_at BIGINT
+);
+
+CREATE INDEX IF NOT EXISTS idx_punishments_report ON punishments(report_id);
 
 -- 首任管理员：保证 Tanhhhhtjy 始终拥有 admin 角色（手动改回 user 不会被覆盖，
 -- 因为应用启动时使用了 AND role <> 'admin' 守卫；init.sql 仅用于全新部署）。
