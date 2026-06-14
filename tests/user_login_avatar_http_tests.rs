@@ -61,6 +61,8 @@ mod infrastructure {
             email: String,
             password: String,
             avatar: String,
+            role: String,
+            banned: bool,
         }
 
         impl StoredUser {
@@ -71,8 +73,8 @@ mod infrastructure {
                     email: self.email,
                     password: self.password,
                     avatar: self.avatar,
-                    role: "user".to_string(),
-                    banned: false,
+                    role: self.role,
+                    banned: self.banned,
                 }
             }
         }
@@ -90,6 +92,18 @@ mod infrastructure {
                 password: &str,
                 avatar: &str,
             ) -> Self {
+                Self::with_user_state(id, name, email, password, avatar, "user", false)
+            }
+
+            pub fn with_user_state(
+                id: Uuid,
+                name: &str,
+                email: &str,
+                password: &str,
+                avatar: &str,
+                role: &str,
+                banned: bool,
+            ) -> Self {
                 let mut users = HashMap::new();
                 users.insert(
                     id,
@@ -99,6 +113,8 @@ mod infrastructure {
                         email: email.to_string(),
                         password: password.to_string(),
                         avatar: avatar.to_string(),
+                        role: role.to_string(),
+                        banned,
                     },
                 );
 
@@ -124,6 +140,8 @@ mod infrastructure {
                         email: user.email,
                         password: user.password,
                         avatar: user.avatar,
+                        role: user.role,
+                        banned: user.banned,
                     },
                 );
                 Ok(())
@@ -310,15 +328,22 @@ struct TestState {
 }
 
 fn test_state(upload_dir: PathBuf, avatar: &str) -> TestState {
-    TestState {
-        jwt_secret: JwtSecret(b"test-secret".to_vec()),
-        user: Arc::new(UserRepository::with_user(
+    test_state_with_repo(
+        upload_dir,
+        UserRepository::with_user(
             Uuid::from_u128(1),
             "alice",
             "alice@example.com",
             "password123",
             avatar,
-        )),
+        ),
+    )
+}
+
+fn test_state_with_repo(upload_dir: PathBuf, user_repo: UserRepository) -> TestState {
+    TestState {
+        jwt_secret: JwtSecret(b"test-secret".to_vec()),
+        user: Arc::new(user_repo),
         verification_codes: Arc::new(RwLock::new(HashMap::new())),
         email: EmailSender,
         upload_dir: UploadDir(Arc::new(upload_dir)),
@@ -432,6 +457,41 @@ async fn login_accepts_username_in_email_field() {
             .as_str()
             .is_some_and(|token| !token.is_empty())
     );
+}
+
+#[tokio::test]
+async fn banned_user_login_returns_forbidden_without_token() {
+    let upload_dir = unique_upload_dir("banned-login");
+    let app = app(test_state_with_repo(
+        upload_dir,
+        UserRepository::with_user_state(
+            Uuid::from_u128(1),
+            "alice",
+            "alice@example.com",
+            "password123",
+            "/static/avatars/existing.png",
+            "user",
+            true,
+        ),
+    ));
+
+    let response = app
+        .oneshot(json_request(
+            "POST",
+            "/api/user/login",
+            json!({
+                "email": "alice",
+                "password": "password123"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = response_json(response).await;
+    assert_eq!(body["success"], false);
+    assert_eq!(body["message"], "账号已被封禁");
+    assert!(body["data"].is_null());
 }
 
 #[tokio::test]
