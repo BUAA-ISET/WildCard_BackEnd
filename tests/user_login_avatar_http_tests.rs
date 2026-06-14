@@ -17,6 +17,9 @@ mod domain {
     pub mod user {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/domain/user.rs"));
     }
+    pub mod report {
+        pub use wildcard_backend::domain::report::*;
+    }
 }
 
 mod error {
@@ -63,6 +66,7 @@ mod infrastructure {
             avatar: String,
             role: String,
             banned: bool,
+            banned_until: Option<i64>,
         }
 
         impl StoredUser {
@@ -75,6 +79,7 @@ mod infrastructure {
                     avatar: self.avatar,
                     role: self.role,
                     banned: self.banned,
+                    banned_until: self.banned_until,
                 }
             }
         }
@@ -115,6 +120,8 @@ mod infrastructure {
                         avatar: avatar.to_string(),
                         role: role.to_string(),
                         banned,
+                        // banned bool 已迁移到 banned_until 时间戳语义：banned=true 等价于一个远期封禁。
+                        banned_until: if banned { Some(i64::MAX) } else { None },
                     },
                 );
 
@@ -142,6 +149,7 @@ mod infrastructure {
                         avatar: user.avatar,
                         role: user.role,
                         banned: user.banned,
+                        banned_until: None,
                     },
                 );
                 Ok(())

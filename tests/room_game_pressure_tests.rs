@@ -61,6 +61,7 @@ mod infrastructure {
             avatar: String,
             role: String,
             banned: bool,
+            banned_until: Option<i64>,
         }
 
         impl StoredUser {
@@ -73,6 +74,7 @@ mod infrastructure {
                     avatar: self.avatar,
                     role: self.role,
                     banned: self.banned,
+                    banned_until: self.banned_until,
                 }
             }
         }
@@ -105,6 +107,7 @@ mod infrastructure {
                                         avatar: user.avatar,
                                         role: user.role,
                                         banned: user.banned,
+                                        banned_until: None,
                                     },
                                 )
                             })
@@ -384,6 +387,7 @@ fn user(id: Uuid, name: &str) -> User {
         avatar: String::new(),
         role: "user".to_string(),
         banned: false,
+        banned_until: None,
     }
 }
 

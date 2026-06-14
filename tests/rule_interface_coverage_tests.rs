@@ -17,6 +17,10 @@ mod domain {
         pub use wildcard_backend::domain::user::*;
     }
 
+    pub mod report {
+        pub use wildcard_backend::domain::report::*;
+    }
+
     pub mod rule_engine {
         pub use wildcard_backend::domain::rule_engine::*;
     }
@@ -43,6 +47,7 @@ mod infrastructure {
             avatar: String,
             role: String,
             banned: bool,
+            banned_until: Option<i64>,
         }
 
         impl StoredUser {
@@ -55,6 +60,7 @@ mod infrastructure {
                     avatar: self.avatar,
                     role: self.role,
                     banned: self.banned,
+                    banned_until: self.banned_until,
                 }
             }
         }
@@ -81,6 +87,7 @@ mod infrastructure {
                                         avatar: user.avatar,
                                         role: user.role,
                                         banned: user.banned,
+                                        banned_until: user.banned_until,
                                     },
                                 )
                             })
@@ -106,6 +113,18 @@ mod infrastructure {
             ) -> Result<(), AppError> {
                 if let Some(user) = self.users.write().await.get_mut(&user_id.0) {
                     user.banned = banned;
+                }
+                Ok(())
+            }
+
+            pub async fn set_user_banned_until(
+                &self,
+                user_id: &UserId,
+                until: Option<i64>,
+            ) -> Result<(), AppError> {
+                if let Some(user) = self.users.write().await.get_mut(&user_id.0) {
+                    user.banned_until = until;
+                    user.banned = until.is_some();
                 }
                 Ok(())
             }
@@ -284,6 +303,8 @@ fn repo_with_state(user_id: Uuid, role: &str, banned: bool) -> Arc<UserRepositor
         avatar: String::new(),
         role: role.to_string(),
         banned,
+        // 拦截逻辑改读 banned_until：封禁时给一个远期到期时间戳。
+        banned_until: if banned { Some(i64::MAX) } else { None },
     }]))
 }
 
@@ -487,6 +508,7 @@ async fn admin_endpoints_stop_on_auth_guard_with_fake_repository() {
         avatar: String::new(),
         role: "user".to_string(),
         banned: false,
+        banned_until: None,
     };
     let repo = Arc::new(UserRepository::with_users(vec![normal_user]));
     let store = store_with(
@@ -619,6 +641,7 @@ async fn admin_review_success_and_conflict_paths_cover_authorized_flow() {
         avatar: String::new(),
         role: "admin".to_string(),
         banned: false,
+        banned_until: None,
     };
     let owner = User {
         id: UserId(owner_id),
@@ -628,6 +651,7 @@ async fn admin_review_success_and_conflict_paths_cover_authorized_flow() {
         avatar: String::new(),
         role: "user".to_string(),
         banned: false,
+        banned_until: None,
     };
     let repo = Arc::new(UserRepository::with_users(vec![admin, owner]));
     let mut pending_old = draft(owner_id, "pending-old", RuleStatus::PendingReview, 1);
@@ -873,6 +897,7 @@ async fn admin_can_unban_user_through_handler() {
             avatar: String::new(),
             role: "admin".to_string(),
             banned: false,
+            banned_until: None,
         },
         User {
             id: UserId(target_id),
@@ -882,6 +907,7 @@ async fn admin_can_unban_user_through_handler() {
             avatar: String::new(),
             role: "user".to_string(),
             banned: true,
+            banned_until: None,
         },
     ]));
 
@@ -910,6 +936,7 @@ async fn admin_approve_reject_pending_paths_reach_persistence_error_branches() {
         avatar: String::new(),
         role: "admin".to_string(),
         banned: false,
+        banned_until: None,
     };
     let repo = Arc::new(UserRepository::with_users(vec![admin]));
 

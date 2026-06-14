@@ -44,7 +44,7 @@ impl UserRepository {
 
     pub async fn find_by_name(&self, name: &str) -> Result<Option<User>, AppError> {
         let user = sqlx::query(
-            "SELECT id, name, email, password, avatar, role, banned FROM users WHERE users.name = $1",
+            "SELECT id, name, email, password, avatar, role, banned, banned_until FROM users WHERE users.name = $1",
         )
         .bind(name)
         .fetch_optional(&self.pool)
@@ -58,6 +58,7 @@ impl UserRepository {
             avatar: user.get("avatar"),
             role: user.get("role"),
             banned: user.get("banned"),
+            banned_until: user.get("banned_until"),
         });
 
         Ok(user)
@@ -65,7 +66,7 @@ impl UserRepository {
 
     pub async fn find_by_email(&self, email: &str) -> Result<Option<User>, AppError> {
         let user = sqlx::query(
-            "SELECT id, name, email, password, avatar, role, banned FROM users WHERE users.email = $1",
+            "SELECT id, name, email, password, avatar, role, banned, banned_until FROM users WHERE users.email = $1",
         )
         .bind(email)
         .fetch_optional(&self.pool)
@@ -79,6 +80,7 @@ impl UserRepository {
             avatar: user.get("avatar"),
             role: user.get("role"),
             banned: user.get("banned"),
+            banned_until: user.get("banned_until"),
         });
 
         Ok(user)
@@ -86,7 +88,7 @@ impl UserRepository {
 
     pub async fn find_by_id(&self, user_id: &UserId) -> Result<Option<User>, AppError> {
         let user = sqlx::query(
-            "SELECT id, name, email, password, avatar, role, banned FROM users WHERE users.id = $1",
+            "SELECT id, name, email, password, avatar, role, banned, banned_until FROM users WHERE users.id = $1",
         )
         .bind(user_id.0)
         .fetch_optional(&self.pool)
@@ -100,6 +102,7 @@ impl UserRepository {
             avatar: user.get("avatar"),
             role: user.get("role"),
             banned: user.get("banned"),
+            banned_until: user.get("banned_until"),
         });
 
         Ok(user)
@@ -111,7 +114,7 @@ impl UserRepository {
         username: &str,
     ) -> Result<User, AppError> {
         let user = sqlx::query(
-            "UPDATE users SET name = $1 WHERE id = $2 RETURNING id, name, email, password, avatar, role, banned",
+            "UPDATE users SET name = $1 WHERE id = $2 RETURNING id, name, email, password, avatar, role, banned, banned_until",
         )
         .bind(username)
         .bind(user_id.0)
@@ -141,12 +144,13 @@ impl UserRepository {
             avatar: user.get("avatar"),
             role: user.get("role"),
             banned: user.get("banned"),
+            banned_until: user.get("banned_until"),
         })
     }
 
     pub async fn update_email(&self, user_id: &UserId, email: &str) -> Result<User, AppError> {
         let user = sqlx::query(
-            "UPDATE users SET email = $1 WHERE id = $2 RETURNING id, name, email, password, avatar, role, banned",
+            "UPDATE users SET email = $1 WHERE id = $2 RETURNING id, name, email, password, avatar, role, banned, banned_until",
         )
         .bind(email)
         .bind(user_id.0)
@@ -176,6 +180,7 @@ impl UserRepository {
             avatar: user.get("avatar"),
             role: user.get("role"),
             banned: user.get("banned"),
+            banned_until: user.get("banned_until"),
         })
     }
 
@@ -196,7 +201,7 @@ impl UserRepository {
 
     pub async fn update_avatar(&self, user_id: &UserId, avatar: &str) -> Result<User, AppError> {
         let user = sqlx::query(
-            "UPDATE users SET avatar = $1 WHERE id = $2 RETURNING id, name, email, password, avatar, role, banned",
+            "UPDATE users SET avatar = $1 WHERE id = $2 RETURNING id, name, email, password, avatar, role, banned, banned_until",
         )
         .bind(avatar)
         .bind(user_id.0)
@@ -212,6 +217,7 @@ impl UserRepository {
             avatar: user.get("avatar"),
             role: user.get("role"),
             banned: user.get("banned"),
+            banned_until: user.get("banned_until"),
         })
     }
 
@@ -219,6 +225,24 @@ impl UserRepository {
     pub async fn set_user_banned(&self, user_id: &UserId, banned: bool) -> Result<(), AppError> {
         sqlx::query("UPDATE users SET banned = $1 WHERE id = $2")
             .bind(banned)
+            .bind(user_id.0)
+            .execute(&self.pool)
+            .await
+            .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        Ok(())
+    }
+
+    /// 设置封禁到期时间戳（毫秒）。Some(until) = 封禁至该时刻；None = 解封。
+    /// 同步把旧 banned bool 列写成 until.is_some()，保持两列一致（旧列仅作历史兼容）。
+    pub async fn set_user_banned_until(
+        &self,
+        user_id: &UserId,
+        until: Option<i64>,
+    ) -> Result<(), AppError> {
+        sqlx::query("UPDATE users SET banned_until = $1, banned = $2 WHERE id = $3")
+            .bind(until)
+            .bind(until.is_some())
             .bind(user_id.0)
             .execute(&self.pool)
             .await

@@ -43,6 +43,13 @@ pub struct UserDto {
     pub role: String,
     #[serde(default)]
     pub banned: bool,
+    /// 封禁到期时间戳（毫秒）。前端可据此显示剩余封禁时间；None 不输出。
+    #[serde(
+        rename = "bannedUntil",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub banned_until: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
 }
@@ -56,6 +63,7 @@ impl UserDto {
             avatar: user.avatar,
             role: user.role,
             banned: user.banned,
+            banned_until: user.banned_until,
             token: None,
         }
     }
@@ -363,6 +371,7 @@ pub async fn register(
         // 新注册一律是普通用户；首任管理员靠 init.sql / ensure_schema 的 UPDATE Tanhhhhtjy 完成。
         role: "user".to_string(),
         banned: false,
+        banned_until: None,
     };
     user_repo.register(user).await?;
 
@@ -408,8 +417,9 @@ pub async fn login(
             return Err(AppError::InvalidInput("账号或密码错误".to_string()));
         }
 
-        // 封禁拦截：密码正确但账号已封禁，拒绝登录（解封后可重新登录）。
-        if user.banned {
+        // 封禁拦截：密码正确但账号封禁未到期，拒绝登录（到期 / 解封后可重新登录）。
+        let now_ms = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000;
+        if crate::domain::report::is_banned(user.banned_until, now_ms) {
             return Err(AppError::Forbidden("账号已被封禁".to_string()));
         }
 
@@ -801,6 +811,7 @@ mod tests {
             avatar: "/avatar.png".to_string(),
             role: "admin".to_string(),
             banned: false,
+            banned_until: None,
         };
 
         let dto = UserDto::from_user(user);
@@ -820,6 +831,7 @@ mod tests {
             avatar: "/avatar.png".to_string(),
             role: "admin".to_string(),
             banned: false,
+            banned_until: None,
         };
 
         let dto = UserDto::from_user_with_token(user, "jwt-token".to_string());

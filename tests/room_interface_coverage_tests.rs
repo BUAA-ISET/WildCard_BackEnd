@@ -61,6 +61,7 @@ mod infrastructure {
                     avatar: self.avatar,
                     role: self.role,
                     banned: false,
+                    banned_until: None,
                 }
             }
         }
@@ -266,6 +267,7 @@ fn user(id: Uuid, name: &str) -> User {
         avatar: format!("/{name}.png"),
         role: "user".to_string(),
         banned: false,
+        banned_until: None,
     }
 }
 

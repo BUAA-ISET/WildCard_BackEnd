@@ -40,6 +40,7 @@ mod infrastructure {
             avatar: String,
             role: String,
             banned: bool,
+            banned_until: Option<i64>,
         }
 
         impl StoredUser {
@@ -52,6 +53,7 @@ mod infrastructure {
                     avatar: user.avatar,
                     role: user.role,
                     banned: user.banned,
+                    banned_until: user.banned_until,
                 }
             }
 
@@ -64,6 +66,7 @@ mod infrastructure {
                     avatar: self.avatar.clone(),
                     role: self.role.clone(),
                     banned: self.banned,
+                    banned_until: self.banned_until,
                 }
             }
         }
@@ -101,6 +104,18 @@ mod infrastructure {
             ) -> Result<(), AppError> {
                 if let Some(user) = self.users.write().await.get_mut(&user_id.0) {
                     user.banned = banned;
+                }
+                Ok(())
+            }
+
+            pub async fn set_user_banned_until(
+                &self,
+                user_id: &UserId,
+                until: Option<i64>,
+            ) -> Result<(), AppError> {
+                if let Some(user) = self.users.write().await.get_mut(&user_id.0) {
+                    user.banned_until = until;
+                    user.banned = until.is_some();
                 }
                 Ok(())
             }
@@ -185,10 +200,12 @@ mod interface {
             Ok(())
         }
 
-        /// 最小化的已发布规则：报表联动只读 / 写 `banned` 字段。
+        /// 最小化的已发布规则：报表联动只读 / 写 `banned`，补齐 enrich 需要的 name / owner_id。
         #[derive(Debug, Default, Clone)]
         pub struct PublishedRule {
             pub id: String,
+            pub name: String,
+            pub owner_id: String,
             pub banned: bool,
         }
 
@@ -263,6 +280,7 @@ fn user(id: Uuid, name: &str, role: &str) -> User {
         avatar: format!("/static/avatars/{name}.png"),
         role: role.to_string(),
         banned: false,
+        banned_until: None,
     }
 }
 
@@ -277,11 +295,14 @@ fn persistence() -> ReportPersistence {
 fn sample_report() -> Report {
     Report {
         id: Uuid::new_v4().to_string(),
+        reporter: None,
         reporter_id: "reporter-1".to_string(),
         reporter_name: "Alice".to_string(),
         reporter_avatar: String::new(),
         target_type: ReportTargetType::PlayerBehavior,
         target_id: "room-42".to_string(),
+        target_user: None,
+        target_rule: None,
         reason: "恶意拖延".to_string(),
         details: "最后一轮持续不操作".to_string(),
         status: ReportStatus::Pending,
@@ -292,6 +313,8 @@ fn sample_report() -> Report {
             "roomCode": "42",
             "sourcePath": "/battle/room-42"
         })),
+        punishment: None,
+        merged_by_punishment_id: None,
         action_log: vec![],
     }
 }
@@ -335,11 +358,7 @@ fn report_action_payload_preserves_optional_params_for_frontend_contract() {
     assert_eq!(payload.action, ReportAction::BanRule);
     assert_eq!(payload.note.as_deref(), Some("封禁相关规则"));
     assert_eq!(
-        payload
-            .params
-            .as_ref()
-            .and_then(|v| v.get("targetId"))
-            .and_then(|v| v.as_str()),
+        payload.params.as_ref().and_then(|p| p.target_id.as_deref()),
         Some("rule-1")
     );
 }
@@ -411,6 +430,9 @@ async fn admin_report_detail_invalid_id_returns_not_found_without_database_looku
         State(Arc::new(UserRepository::with_users(vec![user(
             admin_id, "admin", "admin",
         )]))),
+        State(Arc::new(tokio::sync::RwLock::new(
+            interface::rule::RuleRepository::default(),
+        ))),
         axum::extract::Path("counts".to_string()),
     )
     .await;

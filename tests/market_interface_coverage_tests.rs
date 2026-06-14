@@ -59,6 +59,7 @@ mod infrastructure {
                     avatar: String::new(),
                     role: self.role.clone(),
                     banned: self.banned,
+                    banned_until: None,
                 }))
             }
         }

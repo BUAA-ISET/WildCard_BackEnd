@@ -533,7 +533,7 @@ pub async fn ensure_not_banned(
         .find_by_id(user_id)
         .await?
         .ok_or(AppError::Unauthorized("用户不存在".to_string()))?;
-    if user.banned {
+    if crate::domain::report::is_banned(user.banned_until, now_millis()) {
         return Err(AppError::Forbidden(
             "账号已被封禁，无法执行该操作".to_string(),
         ));
@@ -559,7 +559,7 @@ pub async fn unban_user(
     let target_uuid = Uuid::parse_str(target_id.trim())
         .map_err(|_| AppError::InvalidInput("用户 ID 不是合法 UUID".to_string()))?;
     user_repo
-        .set_user_banned(&UserId(target_uuid), false)
+        .set_user_banned_until(&UserId(target_uuid), None)
         .await?;
     Ok(Json(ApiResponse::success(())))
 }
@@ -1049,6 +1049,17 @@ impl RulePersistence {
             r#"
             ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT false
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .inspect_err(|e| tracing::warn!("Database error {e}"))?;
+
+        // 封禁时长：users 表加 banned_until（毫秒时间戳），NULL = 未封禁。幂等升级。
+        sqlx::query(
+            r#"
+            ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS banned_until BIGINT
             "#,
         )
         .execute(&self.pool)
