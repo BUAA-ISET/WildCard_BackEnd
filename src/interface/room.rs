@@ -10,6 +10,7 @@ use crate::{
     domain::{
         room::{Player, Room, RoomRuleResponse, RoomStatus},
         rule_engine::{GameCard, GameSession, PlayerActionInput, RuleAssets, RuleEngine},
+        user::UserId,
     },
     error::AppError,
     infrastructure::user::UserRepository,
@@ -318,6 +319,7 @@ pub async fn set_ready(
 
 pub async fn start_game(
     TokenClaims { user_id, .. }: TokenClaims,
+    State(user_repo): State<Arc<UserRepository>>,
     State(rule_store): State<RuleStore>,
     State(room_store): State<RoomStore>,
     State(replay_store): State<ReplayStore>,
@@ -344,6 +346,7 @@ pub async fn start_game(
             "房间必须满员且所有玩家已准备".to_string(),
         ));
     }
+    refresh_room_player_profiles(&user_repo, room).await;
 
     let runtime_rule = {
         let rule_guard = rule_store.read().await;
@@ -751,10 +754,23 @@ async fn player_from_claims(
     Ok(Player {
         id: user.id.to_string(),
         username: user.name,
-        avatar: String::new(),
+        avatar: user.avatar,
         is_ready,
         joined_at: Some(now_millis()),
     })
+}
+
+async fn refresh_room_player_profiles(user_repo: &UserRepository, room: &mut Room) {
+    for player in &mut room.players {
+        let Ok(user_uuid) = uuid::Uuid::parse_str(&player.id) else {
+            continue;
+        };
+        let Ok(Some(user)) = user_repo.find_by_id(&UserId(user_uuid)).await else {
+            continue;
+        };
+        player.username = user.name;
+        player.avatar = user.avatar;
+    }
 }
 
 fn build_game_snapshot(

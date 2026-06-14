@@ -506,6 +506,7 @@ async fn room_lifecycle_endpoints_cover_create_join_ready_rule_and_leave() {
 
     let started = start_game(
         claims(host),
+        State(user_repo.clone()),
         State(rules.clone()),
         State(room_store.clone()),
         State(replay_store.clone()),
@@ -599,6 +600,7 @@ async fn room_game_queries_and_actions_cover_snapshot_error_and_finish_paths() {
 
     let not_host = start_game(
         claims(guest),
+        State(user_repo.clone()),
         State(rules.clone()),
         State(room_store.clone()),
         State(replay_store.clone()),
@@ -609,6 +611,7 @@ async fn room_game_queries_and_actions_cover_snapshot_error_and_finish_paths() {
 
     let started = start_game(
         claims(host),
+        State(user_repo.clone()),
         State(rules.clone()),
         State(room_store.clone()),
         State(replay_store.clone()),
